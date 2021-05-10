@@ -26,7 +26,7 @@ def unzip2(ls):
     """
     Unzip a list of 2-tuples.
     :param ls: A list of 2-tuples.
-    :return: A single 2-tuple. The first element of the tuple is a list of the 
+    :return: A single 2-tuple. The first element of the tuple is a list of the
     first elements of the pairs in ls. The second element of the tuple is a list
     of the second elements of the pairs in ls.
     """
@@ -155,7 +155,7 @@ def typecheck(p: RfunProgram) -> RfunProgramT:
             assert t_fun.arg_types == list(arg_types), (t_fun, list(arg_types))
 
             return t_fun.return_type, FuncallTE(new_fun, new_es, t_fun.return_type)
-            
+
         else:
             raise Exception('tc_exp', e)
 
@@ -196,7 +196,7 @@ def shrink(p: RfunProgramT) -> RfunProgramT:
             return LetTE(e.x, new_e1, new_body)
         elif isinstance(e, PrimTE):
             new_args = [shrink_exp(arg) for arg in e.args]
-    
+
             if e.op in ['+', 'not', '==', '<', 'neg', 'vector', 'vectorRef', 'vectorSet']:
                 return PrimTE(e.op, new_args, e.typ)
             elif e.op == '>':
@@ -229,7 +229,7 @@ def shrink(p: RfunProgramT) -> RfunProgramT:
     new_defs = [shrink_def(d) for d in p.defs]
     new_body = shrink_exp(p.body)
     return RfunProgramT(new_defs, new_body)
-    
+
 
 ##################################################
 # uniquify
@@ -249,7 +249,7 @@ def uniquify(p: RfunProgramT) -> RfunProgramT:
 
         arg_env = {a1: a2 for a1, a2 in zip(arg_names, new_arg_names)}
         new_env = {**env, **arg_env}
-        
+
         return RfunDefT(defn.name,
                         new_args,
                         defn.output_type,
@@ -362,13 +362,13 @@ def limit_functions(p: RfunProgramT) -> RfunProgramT:
                             limit_functions_exp(defn.body, {}))
         else:
             vec_name = gensym('args_vec')
-            
+
             first_five_args = defn.args[:5]
             rest_args = defn.args[5:]
             rest_arg_types = [a[1] for a in rest_args]
 
             vec_type = VectorT(rest_arg_types)
-            
+
             env = {}
             for idx, arg_pair in enumerate(rest_args):
                 arg_name, arg_type = arg_pair
@@ -442,7 +442,7 @@ def limit_functions(p: RfunProgramT) -> RfunProgramT:
 def mk_let(bindings: Dict[str, RfunExpT], body: RfunExpT):
     """
     Builds a Let expression from a list of bindings and a body.
-    :param bindings: A list of bindings from variables (str) to their 
+    :param bindings: A list of bindings from variables (str) to their
     expressions (RfunExp)
     :param body: The body of the innermost Let expression
     :return: A Let expression implementing the bindings in "bindings"
@@ -477,20 +477,20 @@ def expose_alloc(p: RfunProgramT) -> RfunProgramT:
             return LetTE(e.x, new_e1, new_body)
         elif isinstance(e, PrimTE):
             new_args = [ea_exp(arg) for arg in e.args]
-    
+
             if e.op == 'vector':
                 vec_type = e.typ
                 assert isinstance(vec_type, VectorT)
-    
+
                 bindings = {}
-    
+
                 # Step 1.
                 # make a name for each element of the vector
                 # bind the name to the input expression
                 var_names = [gensym('v') for _ in new_args]
                 for var, a in zip(var_names, new_args):
                     bindings[var] = a
-    
+
                 # Step 2.
                 # run the collector if we don't have enough space
                 # to do the allocation
@@ -502,19 +502,19 @@ def expose_alloc(p: RfunProgramT) -> RfunProgramT:
                          VoidTE(),
                          PrimTE('collect', [IntTE(total_bytes)], VoidT()),
                          VoidT())
-    
+
                 # Step 3.
                 # allocate the bytes for the vector and give it a name
                 vec_name = gensym('vec')
                 bindings[vec_name] = PrimTE('allocate', [IntTE(len(new_args))], vec_type)
-    
+
                 # Step 4.
                 # vectorSet each element of the allocated vector to its variable
                 # from Step 1
                 for idx in range(len(new_args)):
                     typ = vec_type.types[idx]
                     var = var_names[idx]
-    
+
                     bindings[gensym('_')] = PrimTE('vectorSet',
                                                    [
                                                        VarTE(vec_name, vec_type),
@@ -522,13 +522,13 @@ def expose_alloc(p: RfunProgramT) -> RfunProgramT:
                                                        VarTE(var, typ)
                                                    ],
                                                    VoidT())
-    
+
                 # Step 5.
                 # Make a big Let with all the bindings
                 return mk_let(bindings, VarTE(vec_name, vec_type))
             else:
                 return PrimTE(e.op, new_args, e.typ)
-    
+
         elif isinstance(e, IfTE):
             return IfTE(ea_exp(e.e1),
                         ea_exp(e.e2),
@@ -660,7 +660,7 @@ def explicate_control(p: RfunProgramT) -> cfun.Program:
                         cfg_main)
 
     return cfun.Program(defs + [def_main])
-    
+
 
 def explicate_control_help(e: RfunExpT) -> Dict[str, cfun.Tail]:
     cfg: Dict[str, cfun.Tail] = {}
@@ -862,7 +862,7 @@ def select_instructions(p: cfun.Program) -> Dict[str, x86.Program]:
             return [x86.Movq(x86.Reg('r15'), x86.Reg('rdi')),
                     x86.Movq(x86.Int(e.amount), x86.Reg('rsi')),
                     x86.Callq('collect')]
-            
+
         elif isinstance(e, cfun.Assign):
             if isinstance(e.exp, cfun.AtmExp):
                 return [x86.Movq(si_atm(e.exp.atm), mk_var(e.var, e.is_vec))]
@@ -971,15 +971,61 @@ def select_instructions(p: cfun.Program) -> Dict[str, x86.Program]:
                 param_instrs: List[x86.Instr] = \
                     [x86.Movq(x86.Reg(reg), arg) for arg, reg in
                      zip(args, constants.parameter_passing_registers)]
-                
+
                 x86_blocks[defn.name + '_start'] = param_instrs + si_tail(defn.name, block)
             else:
                 x86_blocks[label] = si_tail(defn.name, block)
-                
+
         return defn.name, x86.Program(x86_blocks)
 
     x86_defs = dict([si_def(d) for d in p.defs])
     return x86_defs
+
+##################################################
+# select-allocation
+##################################################
+
+def select_allocation(program: Dict[str, x86.Program]) -> \
+        Tuple[Dict[str, x86.Program], str]:
+    """
+    Performs machine learning analysis on what allocation type the compiler should use.
+    Returns the input program plus the recommended allocation method.
+    :param program: pseudo-x86 assembly program definitions
+    :return: A tuple. The first element is the same as the input program.
+    The second element is a string with the recommended register allocation method
+    """
+    allocation_type = "graph_color"
+    print(allocation_type)
+    #TODO: implement allocation type selection
+    return (program, allocation_type)
+
+
+##################################################
+# allocate-registers
+##################################################
+def allocate_registers(inputs: Tuple[Dict[str, x86.Program], str]) -> \
+    Tuple[Dict[str, x86.Program],
+          Dict[str, Tuple[x86.Program, int, int]]]:
+    """
+    Assigns homes to variables in the input program. Allocates registers and
+    stack locations as needed, uses one of the possible allocation methods as given
+    by the second argument in the input
+    :param inputs: A Tuple. The first element is the pseudo-x86 program. The
+    second element is the allocation type for the program
+
+    :return: A dict mapping each function name to a Tuple. The first element
+    of each tuple is an x86 program (with no variable references). The second
+    element is the number of bytes needed in regular stack locations. The third
+    element is the number of variables spilled to the root (shadow) stack.
+    """
+    print(inputs)
+    if inputs[1] == 'graph_color':
+        return allocate_registers_gc(build_interference(uncover_live(inputs[0])))
+    elif inputs[1] == 'linear_scan':
+        return linear_scan(inputs[0])
+    else:
+        raise Exception('allocate_registers', e)
+
 
 
 ##################################################
@@ -995,7 +1041,7 @@ def uncover_live(program: Dict[str, x86.Program]) -> \
     :param program: pseudo-x86 assembly program definitions
     :return: A tuple. The first element is the same as the input program. The
     second element is a dict of live-after sets. This dict maps each label in
-    the program to a list of live-after sets for that label. The live-after 
+    the program to a list of live-after sets for that label. The live-after
     sets are in the same order as the label's instructions.
     """
 
@@ -1066,7 +1112,7 @@ def uncover_live(program: Dict[str, x86.Program]) -> \
 
 class InterferenceGraph:
     """
-    A class to represent an interference graph: an undirected graph where nodes 
+    A class to represent an interference graph: an undirected graph where nodes
     are x86.Arg objects and an edge between two nodes indicates that the two
     nodes cannot share the same locations.
     """
@@ -1104,11 +1150,11 @@ def build_interference(inputs: Tuple[Dict[str, x86.Program],
               Dict[str, InterferenceGraph]]:
     """
     Build the interference graph.
-    :param inputs: A Tuple. The first element is a pseudo-x86 program. The 
-    second element is the dict of live-after sets produced by the uncover-live 
+    :param inputs: A Tuple. The first element is a pseudo-x86 program. The
+    second element is the dict of live-after sets produced by the uncover-live
     pass.
-    :return: A Tuple. The first element is the same as the input program. 
-    The second is a dict mapping each function name to its completed 
+    :return: A Tuple. The first element is the same as the input program.
+    The second is a dict mapping each function name to its completed
     interference graph.
     """
 
@@ -1180,12 +1226,12 @@ Color = int
 Coloring = Dict[x86.Var, Color]
 Saturation = Set[Color]
 
-def allocate_registers(inputs: Tuple[Dict[str, x86.Program],
+def allocate_registers_gc(inputs: Tuple[Dict[str, x86.Program],
                                      Dict[str, InterferenceGraph]]) -> \
     Dict[str, Tuple[x86.Program, int, int]]:
     """
-    Assigns homes to variables in the input program. Allocates registers and 
-    stack locations as needed, based on a graph-coloring register allocation 
+    Assigns homes to variables in the input program. Allocates registers and
+    stack locations as needed, based on a graph-coloring register allocation
     algorithm.
     :param inputs: A Tuple. The first element is the pseudo-x86 program. The
     second element is a dict mapping function names to interference graphs.
@@ -1366,7 +1412,7 @@ def allocate_registers_help(inputs: Tuple[x86.Program, InterferenceGraph]) -> \
 def patch_instructions(inputs: Dict[str, Tuple[x86.Program, int, int]]) -> \
     Dict[str, Tuple[x86.Program, int, int]]:
     """
-    Patches instructions with two memory location inputs, using %rax as a 
+    Patches instructions with two memory location inputs, using %rax as a
     temporary location.
     :param inputs: A dict mapping each function name to a Tuple. The first
     element of each tuple is an x86 program. The second element is the stack
@@ -1517,7 +1563,7 @@ def print_x86_help(name: str, inputs: Tuple[x86.Program, int, int]) -> str:
                 return code
         elif isinstance(e, x86.IndirectCallq):
             return f'callq *{print_arg(e.e1)}'
-                
+
         else:
             raise Exception('print_instr', e)
 
@@ -1591,9 +1637,11 @@ compiler_passes = {
     'remove complex opera*': rco,
     'explicate control': explicate_control,
     'select instructions': select_instructions,
-    'uncover live': uncover_live,
-    'build interference': build_interference,
+    'select allocation': select_allocation,
     'allocate registers': allocate_registers,
+    #'uncover live': uncover_live,
+    #'build interference': build_interference,
+    #'allocate registers': allocate_registers,
     'patch instructions': patch_instructions,
     'print x86': print_x86
 }
