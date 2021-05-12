@@ -994,8 +994,13 @@ def select_allocation(program: Dict[str, x86.Program]) -> \
     :return: A tuple. The first element is the same as the input program.
     The second element is a string with the recommended register allocation method
     """
-    allocation_type = "graph_color"
+    if len(sys.argv) > 2:
+        allocation_type = str(sys.argv[2])
+    else:
+        #default to graph coloring
+        allocation_type = "graph_color"
     print(allocation_type)
+
     #TODO: implement allocation type selection
     return (program, allocation_type)
 
@@ -1025,6 +1030,67 @@ def allocate_registers(inputs: Tuple[Dict[str, x86.Program], str]) -> \
         return linear_scan(inputs[0])
     else:
         raise Exception('allocate_registers', e)
+
+
+##################################################
+# linear-scan
+##################################################
+
+def linear_scan(program: Dict[str, x86.Program]) -> \
+    Dict[str, Tuple[x86.Program, int, int]]:
+    """
+    Assigns homes to variables in the input program. Allocates registers and
+    stack locations as needed, based on the linear scan algorithm.
+    :param program: pseudo-x86 assembly program definitions
+
+    :return: A dict mapping each function name to a Tuple. The first element
+    of each tuple is an x86 program (with no variable references). The second
+    element is the number of bytes needed in regular stack locations. The third
+    element is the number of variables spilled to the root (shadow) stack.
+    """
+    #TODO: implement linear scan algorithm
+    '''
+    https://www.cs.rice.edu/~vs3/PDF/cc2007.pdf
+    //checking for feasible solution
+    //might not need to implement this
+    for each program point P in IEP, in increasing order do
+        for each interval[O,P] in I
+            do numlive--
+        for each interval[P,Q] in I
+            do numlive++
+        count[P] := numlive
+
+    if( there exists a program point P in IEP with count[P]>k) then
+        Success := false
+        return
+    Success := true
+
+    //register allocation
+    Initialize avail := set of all physical registers, 1...k
+    for each program point P in IEP, in increasing order do
+        for each interval[O,P] in I do
+            avail := avail ∪ {rj}, where rj is the physical register that had been pre-viously assigned to interval[O,P]
+        for each interval[P,Q] in I do
+            Lets := symbolic register corresponding to[P,Q]
+            Select a physical register rj from avail, using the following heuristics:
+                –If s is live at P, then prefer selecting rj previously assigned to s
+                –If program point P corresponds to a register-to-register copy statement of the form, s := t, then prefer selecting rj reviously assigned to t.
+            reg(s,[P,Q]) := rj /*s is assigned rj for all points in[P,Q]*/
+            avail := avail - {rj}
+
+    /* Insert register move instructions as needed. */
+    for each program point P do
+        for each program point Q that is a control flow successor to P do
+        Initialize M to be an empty set of move instructions
+        for each symbolic reg s such that s is live at P and Q do
+            if(reg(s,P)=!reg(s,Q)) then
+                insert a move instruction “reg(s,Q):=reg(s,P)” into set M
+        Treat the move instructions in M as a directed graph G in which there is an edge from move instruction m1 to move instruction m2 if m1 reads the register written by m2
+        Compute the strongly connected components (SCC’s) of directed graph G
+        For each SCC, create a sequence of move and xor instructions to implement its register moves without the use of a temporary register, and insert these instructions on the control flow edge from P to Q(as part of Output 3 in Figure 3)\
+
+	'''
+    pass
 
 
 
@@ -1680,7 +1746,7 @@ def run_compiler(s: str, logging=False) -> str:
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 2:
+    if len(sys.argv) < 2:
         print('Usage: python compiler.py <source filename>')
     else:
         file_name = sys.argv[1]
