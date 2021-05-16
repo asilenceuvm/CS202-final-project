@@ -981,117 +981,6 @@ def select_instructions(p: cfun.Program) -> Dict[str, x86.Program]:
     x86_defs = dict([si_def(d) for d in p.defs])
     return x86_defs
 
-##################################################
-# select-allocation
-##################################################
-
-def select_allocation(program: Dict[str, x86.Program]) -> \
-        Tuple[Dict[str, x86.Program], str]:
-    """
-    Performs machine learning analysis on what allocation type the compiler should use.
-    Returns the input program plus the recommended allocation method.
-    :param program: pseudo-x86 assembly program definitions
-    :return: A tuple. The first element is the same as the input program.
-    The second element is a string with the recommended register allocation method
-    """
-    if len(sys.argv) > 2:
-        allocation_type = str(sys.argv[2])
-    else:
-        #default to graph coloring
-        allocation_type = "graph_color"
-    print(allocation_type)
-
-    #TODO: implement allocation type selection
-    return (program, allocation_type)
-
-
-##################################################
-# allocate-registers
-##################################################
-def allocate_registers(inputs: Tuple[Dict[str, x86.Program], str]) -> \
-    Tuple[Dict[str, x86.Program],
-          Dict[str, Tuple[x86.Program, int, int]]]:
-    """
-    Assigns homes to variables in the input program. Allocates registers and
-    stack locations as needed, uses one of the possible allocation methods as given
-    by the second argument in the input
-    :param inputs: A Tuple. The first element is the pseudo-x86 program. The
-    second element is the allocation type for the program
-
-    :return: A dict mapping each function name to a Tuple. The first element
-    of each tuple is an x86 program (with no variable references). The second
-    element is the number of bytes needed in regular stack locations. The third
-    element is the number of variables spilled to the root (shadow) stack.
-    """
-    print(inputs)
-    if inputs[1] == 'graph_color':
-        return allocate_registers_gc(build_interference(uncover_live(inputs[0])))
-    elif inputs[1] == 'linear_scan':
-        return linear_scan(inputs[0])
-    else:
-        raise Exception('allocate_registers', e)
-
-
-##################################################
-# linear-scan
-##################################################
-
-def linear_scan(program: Dict[str, x86.Program]) -> \
-    Dict[str, Tuple[x86.Program, int, int]]:
-    """
-    Assigns homes to variables in the input program. Allocates registers and
-    stack locations as needed, based on the linear scan algorithm.
-    :param program: pseudo-x86 assembly program definitions
-
-    :return: A dict mapping each function name to a Tuple. The first element
-    of each tuple is an x86 program (with no variable references). The second
-    element is the number of bytes needed in regular stack locations. The third
-    element is the number of variables spilled to the root (shadow) stack.
-    """
-    #TODO: implement linear scan algorithm
-    '''
-    https://www.cs.rice.edu/~vs3/PDF/cc2007.pdf
-    //checking for feasible solution
-    //might not need to implement this
-    for each program point P in IEP, in increasing order do
-        for each interval[O,P] in I
-            do numlive--
-        for each interval[P,Q] in I
-            do numlive++
-        count[P] := numlive
-
-    if( there exists a program point P in IEP with count[P]>k) then
-        Success := false
-        return
-    Success := true
-
-    //register allocation
-    Initialize avail := set of all physical registers, 1...k
-    for each program point P in IEP, in increasing order do
-        for each interval[O,P] in I do
-            avail := avail ∪ {rj}, where rj is the physical register that had been pre-viously assigned to interval[O,P]
-        for each interval[P,Q] in I do
-            Lets := symbolic register corresponding to[P,Q]
-            Select a physical register rj from avail, using the following heuristics:
-                –If s is live at P, then prefer selecting rj previously assigned to s
-                –If program point P corresponds to a register-to-register copy statement of the form, s := t, then prefer selecting rj reviously assigned to t.
-            reg(s,[P,Q]) := rj /*s is assigned rj for all points in[P,Q]*/
-            avail := avail - {rj}
-
-    /* Insert register move instructions as needed. */
-    for each program point P do
-        for each program point Q that is a control flow successor to P do
-        Initialize M to be an empty set of move instructions
-        for each symbolic reg s such that s is live at P and Q do
-            if(reg(s,P)=!reg(s,Q)) then
-                insert a move instruction “reg(s,Q):=reg(s,P)” into set M
-        Treat the move instructions in M as a directed graph G in which there is an edge from move instruction m1 to move instruction m2 if m1 reads the register written by m2
-        Compute the strongly connected components (SCC’s) of directed graph G
-        For each SCC, create a sequence of move and xor instructions to implement its register moves without the use of a temporary register, and insert these instructions on the control flow edge from P to Q(as part of Output 3 in Figure 3)\
-
-	'''
-    pass
-
 
 
 ##################################################
@@ -1169,7 +1058,335 @@ def uncover_live(program: Dict[str, x86.Program]) -> \
     for name in program.keys():
         ul_block(name + '_start')
 
+    print(live_after_sets)
     return program, live_after_sets
+
+
+##################################################
+# select-allocation
+##################################################
+
+def select_allocation(inputs: Tuple[Dict[str, x86.Program], Dict[str, List[Set[x86.Var]]]]) -> \
+        Tuple[Dict[str, x86.Program], str, Dict[str, List[Set[x86.Var]]]]:
+    """
+    Performs machine learning analysis on what allocation type the compiler should use.
+    Returns the input program plus the recommended allocation method.
+    :param program: pseudo-x86 assembly program definitions
+    :return: A tuple. The first element is the same as the input program.
+    The second element is a string with the recommended register allocation method
+    """
+    print(type(inputs))
+    if len(sys.argv) > 2:
+        allocation_type = str(sys.argv[2])
+    else:
+        #default to graph coloring
+        allocation_type = "graph_color"
+    print(allocation_type)
+
+    #TODO: implement allocation type selection
+    return (inputs[0], allocation_type, inputs[1])
+
+##################################################
+# allocate-registers
+##################################################
+def allocate_registers(inputs: Tuple[Dict[str, x86.Program], str, Dict[str, List[Set[x86.Var]]]]) -> \
+    Tuple[Dict[str, x86.Program],
+          Dict[str, Tuple[x86.Program, int, int]]]:
+    """
+    Assigns homes to variables in the input program. Allocates registers and
+    stack locations as needed, uses one of the possible allocation methods as given
+    by the second argument in the input
+    :param inputs: A Tuple. The first element is the pseudo-x86 program. The
+    second element is the allocation type for the program
+
+    :return: A dict mapping each function name to a Tuple. The first element
+    of each tuple is an x86 program (with no variable references). The second
+    element is the number of bytes needed in regular stack locations. The third
+    element is the number of variables spilled to the root (shadow) stack.
+    """
+    print(inputs)
+    if inputs[1] == 'graph_color':
+        return allocate_registers_gc(build_interference((inputs[0], inputs[2])))
+    elif inputs[1] == 'linear_scan':
+        return linear_scan(inputs[0])
+    else:
+        raise Exception('allocate_registers', e)
+
+##################################################
+# linear-scan
+##################################################
+
+class LiveInterval:
+    """
+    Helper class to represent live intervals
+    """
+    startpoint: int
+    endpoint: int
+
+    def __init__(self):
+        startpoint = 0
+        endpoint = 0
+
+    def set_startpoint(self, startpoint):
+        self.startpoint = startpoint
+
+    def set_endpoint(self, endpoint):
+        self.endpoint = endpoint
+
+    def __str__(self):
+        return f'{startpoint} {endpoint}'
+
+
+
+def linear_scan(program: Dict[str, x86.Program]) -> \
+    Dict[str, Tuple[x86.Program, int, int]]:
+    """
+    Assigns homes to variables in the input program. Allocates registers and
+    stack locations as needed, based on the linear scan algorithm.
+    :param program: pseudo-x86 assembly program definitions
+
+    :return: A dict mapping each function name to a Tuple. The first element
+    of each tuple is an x86 program (with no variable references). The second
+    element is the number of bytes needed in regular stack locations. The third
+    element is the number of variables spilled to the root (shadow) stack.
+    """
+    #TODO: implement linear scan algorithm
+    '''
+    https://www.cs.rice.edu/~vs3/PDF/cc2007.pdf
+    //checking for feasible solution
+    //might not need to implement this
+    for each program point P in IEP, in increasing order do
+        for each interval[O,P] in I
+            do numlive--
+        for each interval[P,Q] in I
+            do numlive++
+        count[P] := numlive
+
+    if( there exists a program point P in IEP with count[P]>k) then
+        Success := false
+        return
+    Success := true
+
+    //register allocation
+    Initialize avail := set of all physical registers, 1...k
+    for each program point P in IEP, in increasing order do
+        for each interval[O,P] in I do
+            avail := avail ∪ {rj}, where rj is the physical register that had been pre-viously assigned to interval[O,P]
+        for each interval[P,Q] in I do
+            Lets := symbolic register corresponding to[P,Q]
+            Select a physical register rj from avail, using the following heuristics:
+                –If s is live at P, then prefer selecting rj previously assigned to s
+                –If program point P corresponds to a register-to-register copy statement of the form, s := t, then prefer selecting rj reviously assigned to t.
+            reg(s,[P,Q]) := rj /*s is assigned rj for all points in[P,Q]*/
+            avail := avail - {rj}
+
+    /* Insert register move instructions as needed. */
+    for each program point P do
+        for each program point Q that is a control flow successor to P do
+        Initialize M to be an empty set of move instructions
+        for each symbolic reg s such that s is live at P and Q do
+            if(reg(s,P)=!reg(s,Q)) then
+                insert a move instruction “reg(s,Q):=reg(s,P)” into set M
+        Treat the move instructions in M as a directed graph G in which there is an edge from move instruction m1 to move instruction m2 if m1 reads the register written by m2
+        Compute the strongly connected components (SCC’s) of directed graph G
+        For each SCC, create a sequence of move and xor instructions to implement its register moves without the use of a temporary register, and insert these instructions on the control flow edge from P to Q(as part of Output 3 in Figure 3)\
+
+	'''
+
+    #avail == caller_saved_registers
+    caller_saved_registers = [x86.Reg(r) for r in constants.caller_saved_registers]
+    callee_saved_registers = [x86.Reg(r) for r in constants.callee_saved_registers]
+
+    active = set()
+    def expire_old_intervals(i):
+        for j in active: #in order of increasing endpoint
+            if endpoint[j] >= startpoint[i]:
+                return
+            active -= j
+            caller_saved_registers.append(j)
+
+    def spill_at_interval(i):
+        spill = active[-1]
+        if endpoint[spill] > endpoint[i]:
+            register[i]
+
+
+    #live_intervals is the sorted in increasing order of start points of live intervals
+    for i in live_interval:
+        expire_old_intervals(i)
+        if len(active) == len(caller_saved_registers):
+            spill_at_interval(i)
+        else:
+            active.append(i)
+
+
+
+    defs, interference_graphs = inputs
+    def_names = defs.keys()
+    results = {}
+
+    for name in def_names:
+        helper_inputs = (defs[name], interference_graphs[name])
+        results[name] = allocate_registers_help(helper_inputs)
+
+    return results
+
+    def allocate_registers_help(inputs: Tuple[x86.Program, InterferenceGraph]) -> \
+            Tuple[x86.Program, int, int]:
+
+        ## Functions for listing the variables in the program
+        def vars_arg(a: x86.Arg) -> Set[x86.Var]:
+            if isinstance(a, (x86.Int, x86.Reg, x86.ByteReg, x86.GlobalVal, x86.Deref,
+                              x86.FunRef)):
+                return set()
+            elif isinstance(a, x86.Var):
+                return {a}
+            else:
+                raise Exception('vars_arg allocate_registers', a)
+
+        def vars_instr(e: x86.Instr) -> Set[x86.Var]:
+            if isinstance(e, (x86.Movq, x86.Addq, x86.Cmpq, x86.Movzbq, x86.Xorq, x86.Leaq)):
+                return vars_arg(e.e1).union(vars_arg(e.e2))
+            elif isinstance(e, (x86.Set, x86.Negq, x86.TailJmp, x86.IndirectCallq)):
+                return vars_arg(e.e1)
+            elif isinstance(e, (x86.Callq, x86.Retq, x86.Jmp, x86.JmpIf)):
+                return set()
+            else:
+                raise Exception('vars_instr allocate_registers', e)
+
+        # Defines the set of registers to use
+        register_locations = [x86.Reg(r) for r in
+                              constants.caller_saved_registers + constants.callee_saved_registers]
+
+        ## Functions for graph coloring
+        def color_graph(local_vars: Set[x86.Var], interference_graph: InterferenceGraph) -> Coloring:
+            coloring = {}
+
+            to_color = local_vars.copy()
+            saturation_sets = {x: set() for x in local_vars}
+
+            # init the saturation sets
+            for color, register in enumerate(register_locations):
+                for neighbor in interference_graph.neighbors(register):
+                    if isinstance(neighbor, x86.Var):
+                        saturation_sets[neighbor].add(color)
+
+            while to_color:
+                x = max(to_color, key=lambda x: len(saturation_sets[x]))
+                to_color.remove(x)
+
+                x_color = next(i for i in itertools.count() if i not in saturation_sets[x])
+                coloring[x] = x_color
+
+                for y in interference_graph.neighbors(x):
+                    if isinstance(y, x86.Var):
+                        saturation_sets[y].add(x_color)
+
+            return coloring
+
+        # Functions for allocating registers
+        def make_stack_loc(offset):
+            return x86.Deref(-(offset * 8), 'rbp')
+
+
+        # Functions for replacing variables with their homes
+        homes: Dict[x86.Var, x86.Arg] = {}
+
+        def ah_arg(a: x86.Arg) -> x86.Arg:
+            if isinstance(a, (x86.Int, x86.Reg, x86.ByteReg, x86.Deref,
+                              x86.GlobalVal, x86.FunRef)):
+                return a
+            elif isinstance(a, x86.Var):
+                return homes[a]
+            else:
+                raise Exception('ah_arg', a)
+
+        def ah_instr(e: x86.Instr) -> x86.Instr:
+            if isinstance(e, x86.Movq):
+                return x86.Movq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Addq):
+                return x86.Addq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Cmpq):
+                return x86.Cmpq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Movzbq):
+                return x86.Movzbq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Xorq):
+                return x86.Xorq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Negq):
+                return x86.Negq(ah_arg(e.e1))
+            elif isinstance(e, x86.Leaq):
+                return x86.Leaq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Set):
+                return x86.Set(e.cc, ah_arg(e.e1))
+            elif isinstance(e, x86.TailJmp):
+                return x86.TailJmp(ah_arg(e.e1), e.num_args)
+            elif isinstance(e, x86.IndirectCallq):
+                return x86.IndirectCallq(ah_arg(e.e1), e.num_args)
+            elif isinstance(e, (x86.Callq, x86.Retq, x86.Jmp, x86.JmpIf)):
+                return e
+            else:
+                raise Exception('ah_instr', e)
+
+        def ah_block(instrs: List[x86.Instr]) -> List[x86.Instr]:
+            return [ah_instr(i) for i in instrs]
+
+        def align(num_bytes: int) -> int:
+            if num_bytes % 16 == 0:
+                return num_bytes
+            else:
+                return num_bytes + (16 - (num_bytes % 16))
+
+        # Main body of the pass
+        program, interference_graph = inputs
+        blocks = program.blocks
+
+        local_vars = set()
+        for block in blocks.values():
+            for instr in block:
+                local_vars = local_vars.union(vars_instr(instr))
+
+        coloring = color_graph(local_vars, interference_graph)
+        color_map = dict(enumerate(register_locations))
+        vec_color_map = dict(enumerate(register_locations))
+
+        stack_spills = 0
+        root_stack_spills = 0
+
+        # fill in locations in the color map
+        for v in local_vars:
+            if isinstance(v, x86.VecVar):
+                color = coloring[v]
+                if color in vec_color_map:
+                    pass
+                else:
+                    root_stack_spills = root_stack_spills + 1
+                    offset = root_stack_spills
+                    vec_color_map[color] = x86.Deref(-(offset * 8), 'r15')
+            elif isinstance(v, x86.Var):
+                color = coloring[v]
+                if color in color_map:
+                    pass
+                else:
+                    stack_spills = stack_spills + 1
+                    offset = stack_spills + 1
+                    color_map[color] = x86.Deref(-(offset * 8), 'rbp')
+
+        # build "homes"
+        for v in local_vars:
+            color = coloring[v]
+            if isinstance(v, x86.VecVar):
+                homes[v] = vec_color_map[color]
+            elif isinstance(v, x86.Var):
+                homes[v] = color_map[color]
+
+        blocks = program.blocks
+        new_blocks = {label: ah_block(block) for label, block in blocks.items()}
+        return x86.Program(new_blocks), align(8 * stack_spills), root_stack_spills
+
+    pass
+
+
+
 
 
 ##################################################
@@ -1703,11 +1920,11 @@ compiler_passes = {
     'remove complex opera*': rco,
     'explicate control': explicate_control,
     'select instructions': select_instructions,
+    'uncover live': uncover_live,
     'select allocation': select_allocation,
     'allocate registers': allocate_registers,
-    #'uncover live': uncover_live,
     #'build interference': build_interference,
-    #'allocate registers': allocate_registers,
+    #'allocate registers': allocate_registers_gc,
     'patch instructions': patch_instructions,
     'print x86': print_x86
 }
