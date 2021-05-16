@@ -1137,8 +1137,8 @@ class LiveInterval:
         return f'{startpoint} {endpoint}'
 
 
-
-def linear_scan(program: Dict[str, x86.Program]) -> \
+def linear_scan(inputs: Tuple[Dict[str, x86.Program],
+                                     Dict[str, InterferenceGraph]]) -> \
     Dict[str, Tuple[x86.Program, int, int]]:
     """
     Assigns homes to variables in the input program. Allocates registers and
@@ -1197,10 +1197,15 @@ def linear_scan(program: Dict[str, x86.Program]) -> \
     caller_saved_registers = [x86.Reg(r) for r in constants.caller_saved_registers]
     callee_saved_registers = [x86.Reg(r) for r in constants.callee_saved_registers]
 
-    active = set()
-    def expire_old_intervals(i):
-        for j in active: #in order of increasing endpoint
-            if endpoint[j] >= startpoint[i]:
+    active = [] # active is the list, sorted in order of increasing end point, of live intervals overlapping the current point and placed in registers
+    live_interval = [] # live intervals
+    def rvals(i : LiveInterval):
+        j = active[1]
+
+    def expire_old_intervals(i : LiveInterval):
+        for j in active: #TODO: in order of increasing endpoint
+            assert isinstance(j, LiveInterval)
+            if j.endpoint >= i.startpoint:
                 return
             active -= j
             caller_saved_registers.append(j)
@@ -1230,6 +1235,8 @@ def linear_scan(program: Dict[str, x86.Program]) -> \
         results[name] = allocate_registers_help(helper_inputs)
 
     return results
+
+
 
     def allocate_registers_help(inputs: Tuple[x86.Program, InterferenceGraph]) -> \
             Tuple[x86.Program, int, int]:
