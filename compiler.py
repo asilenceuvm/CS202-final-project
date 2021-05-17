@@ -1264,15 +1264,17 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
     
     '''
 
-    def linear_scan_def(p: x86.Program) -> Tuple[x86.Program, int, int]:
+    def linear_scan_def(p: x86.Program, live_intervals: List[LiveInterval]) -> Tuple[x86.Program, int, int]:
         """
         Perform a linear scan register allocation algorithm on a single block.
-        :param p: A single x86.Program body
+        :param p: A pseudo-x86 program (one defn's body)
+        :param live_intervals: A list of LiveIntervals for the given program block
         :return: A Tuple. The first element is an x86 program (with no variable
             references). The second element is the number of bytes needed in regular
             stack locations. The third element is the number of variables spilled to
             the root (shadow) stack.
         """
+        assert len(p.blocks) == 1
 
         # Active is the list, sorted in order of increasing end point, of live intervals
         # overlapping the current point and placed in registers
@@ -1284,17 +1286,18 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
         # `active` is the list, sorted in order of increasing end point,
         # of live intervals overlapping the current point and placed in registers
         active: List[LiveInterval] = []
-        live_intervals: List[LiveInterval] = []
 
         def expire_old_intervals(i: LiveInterval) -> None:
-            active.sort(key=lambda x: x.endpoint)
-            for j in active:  # sort active by increasing end point
+            # Sort active by increasing end point
+            active.sort(key=lambda interval: interval.endpoint)
+            for j in active:
                 if j.endpoint >= i.endpoint:
                     return
                 active.remove(j)
                 available.append(j.location)
 
         def spill_at_interval(i: LiveInterval) -> None:
+            # Sort active by increasing end point
             active.sort(key=lambda interval: interval.endpoint)
             spill = active[-1]
             if spill.endpoint > i.endpoint:
@@ -1306,6 +1309,8 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
                 i.location = make_stack_loc(0)
 
         '''
+        >>> Implementing this below...
+        
         LinearScanRegisterAllocation
             active ←{}
             foreach live interval i, in order of increasing start point
@@ -1316,7 +1321,6 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
                     register[i] ← a register removed from pool of free registers
                     add i to active, sorted by increasing end point
         '''
-
         live_intervals.sort(key=lambda int_: int_.startpoint)
         ic('sorted live_intervals')
         ic(live_intervals)
@@ -1325,10 +1329,16 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
             if len(active) == num_available:
                 spill_at_interval(interval)
             else:
+                # Take a register from the pool of free registers
                 interval.register = available.pop(-1)
                 active.append(interval)
+
                 # TODO Make active a queue.PriorityQueue ?
                 active.sort(key=lambda int_: int_.endpoint)
+
+        # TODO LiveIntervals should all have `location`s now?
+        for l in live_intervals:
+            ic(l.location)
 
         # TODO Return a Tuple[x86.Program, int, int] - how????????
         # >>> How assign_homes does it:
@@ -1342,7 +1352,7 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
     def make_stack_loc(offset: int) -> x86.Deref:
         return x86.Deref(-(offset * 8), 'rbp')
 
-    results = {name: linear_scan_def(prog) for name, prog in defs.items()}
+    results = {name: linear_scan_def(prog, defs_live_intervals[name]) for name, prog in defs.items()}
     ic(results)
     return results
 
