@@ -1110,7 +1110,7 @@ def allocate_registers(inputs: Tuple[Dict[str, x86.Program], Dict[str, List[Set[
     """
 
     p, live_after_sets, allocation_type = inputs
-
+    #allocation_type = 'graph_color'
     if allocation_type == 'graph_color':
         return allocate_registers_graph_coloring(build_interference((p, live_after_sets)))
     elif allocation_type == 'linear_scan':
@@ -1286,6 +1286,8 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
         # `active` is the list, sorted in order of increasing end point,
         # of live intervals overlapping the current point and placed in registers
         active: List[LiveInterval] = []
+        stack_spills = 0
+        root_stack_spills = 0
 
         def expire_old_intervals(i: LiveInterval) -> None:
             # Sort active by increasing end point
@@ -1301,6 +1303,7 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
             active.sort(key=lambda interval: interval.endpoint)
             spill = active[-1]
             if spill.endpoint > i.endpoint:
+                #stack_spills += 1
                 i.location = spill.location
                 spill.location = make_stack_loc(0)
                 active.remove(spill)
@@ -1308,22 +1311,10 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
             else:
                 i.location = make_stack_loc(0)
 
-        '''
-        >>> Implementing this below...
-        
-        LinearScanRegisterAllocation
-            active ←{}
-            foreach live interval i, in order of increasing start point
-                ExpireOldIntervals(i)
-                if length(active) = R then
-                    SpillAtInterval(i)
-                else
-                    register[i] ← a register removed from pool of free registers
-                    add i to active, sorted by increasing end point
-        '''
+
         live_intervals.sort(key=lambda int_: int_.startpoint)
-        ic('sorted live_intervals')
-        ic(live_intervals)
+        #ic('sorted live_intervals')
+        #ic(live_intervals)
         for interval in live_intervals:
             expire_old_intervals(interval)
             if len(active) == num_available:
@@ -1337,8 +1328,60 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
                 active.sort(key=lambda int_: int_.endpoint)
 
         # TODO LiveIntervals should all have `location`s now?
-        for l in live_intervals:
-            ic(l.location)
+        #for l in live_intervals:
+         #   ic(l.location)
+        ic(live_intervals)
+        # TODO: take live intervals, with their names (variables name) and map them to the location
+        homes: Dict[x86.Var, x86.Arg] = {}
+
+        for live_interval in live_intervals:
+            homes[x86.Var(live_interval.name)] = live_interval.location
+
+        ic(homes)
+
+        def ah_arg(a: x86.Arg) -> x86.Arg:
+            if isinstance(a, (x86.Int, x86.Reg, x86.ByteReg, x86.Deref,
+                              x86.GlobalVal, x86.FunRef)):
+                return a
+            elif isinstance(a, x86.Var):
+                return homes[a]
+            else:
+                raise Exception('ah_arg', a)
+
+        def ah_instr(e: x86.Instr) -> x86.Instr:
+            if isinstance(e, x86.Movq):
+                return x86.Movq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Addq):
+                return x86.Addq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Cmpq):
+                return x86.Cmpq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Movzbq):
+                return x86.Movzbq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Xorq):
+                return x86.Xorq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Negq):
+                return x86.Negq(ah_arg(e.e1))
+            elif isinstance(e, x86.Leaq):
+                return x86.Leaq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Set):
+                return x86.Set(e.cc, ah_arg(e.e1))
+            elif isinstance(e, x86.TailJmp):
+                return x86.TailJmp(ah_arg(e.e1), e.num_args)
+            elif isinstance(e, x86.IndirectCallq):
+                return x86.IndirectCallq(ah_arg(e.e1), e.num_args)
+            elif isinstance(e, (x86.Callq, x86.Retq, x86.Jmp, x86.JmpIf)):
+                return e
+            else:
+                raise Exception('ah_instr', e)
+
+        def ah_block(instrs: List[x86.Instr]) -> List[x86.Instr]:
+            return [ah_instr(i) for i in instrs]
+
+        def align(num_bytes: int) -> int:
+            if num_bytes % 16 == 0:
+                return num_bytes
+            else:
+                return num_bytes + (16 - (num_bytes % 16))
 
         # TODO Return a Tuple[x86.Program, int, int] - how????????
         # >>> How assign_homes does it:
@@ -1346,6 +1389,9 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
         # new_blocks = {label: ah_block(block) for label, block in blocks.items()}
         # return x86.Program(new_blocks), align(8 * stack_spills), root_stack_spills
 
+        blocks = p.blocks
+        new_blocks = {label: ah_block(block) for label, block in blocks.items()}
+        return x86.Program(new_blocks), 0, 0#align(8 * stack_spills), root_stack_spills
 
         return None
 
@@ -1596,6 +1642,8 @@ def allocate_registers_graph_coloring(inputs: Tuple[Dict[str, x86.Program],
         coloring = color_graph(local_vars, interference_graph)
         color_map = dict(enumerate(register_locations))
         vec_color_map = dict(enumerate(register_locations))
+        ic(color_map)
+        ic(coloring)
 
         stack_spills = 0
         root_stack_spills = 0
