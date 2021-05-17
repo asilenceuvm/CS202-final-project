@@ -1110,7 +1110,7 @@ def allocate_registers(inputs: Tuple[Dict[str, x86.Program], Dict[str, List[Set[
     """
 
     p, live_after_sets, allocation_type = inputs
-    allocation_type = 'graph_color'
+    # allocation_type = 'graph_color'
     if allocation_type == 'graph_color':
         return allocate_registers_graph_coloring(build_interference((p, live_after_sets)))
     elif allocation_type == 'linear_scan':
@@ -1125,6 +1125,9 @@ def allocate_registers(inputs: Tuple[Dict[str, x86.Program], Dict[str, List[Set[
 # allocate-registers
 ##################################################
 
+Color = int
+Coloring = Dict[x86.Var, Color]
+
 ''' =============== allocate-registers: Linear Scan =============== '''
 
 class LiveInterval:
@@ -1134,16 +1137,16 @@ class LiveInterval:
     name: str
     startpoint: int
     endpoint: int
-    location: Union[x86.Reg, x86.Deref]
+    location: Color
 
-    def __init__(self, name: str, startpoint: int, endpoint: int, location: Union[x86.Reg, x86.Deref, None] = None):
+    def __init__(self, name: str, startpoint: int, endpoint: int, color: Color = None):
         self.name = name
         self.startpoint = startpoint
         self.endpoint = endpoint
-        self.location = location
+        self.color = color
 
     def __str__(self):
-        return f'`{self.name}`: ({self.startpoint}-{self.endpoint}), location={self.location}'
+        return f'`{self.name}`: ({self.startpoint}-{self.endpoint}), color={self.color}'
 
     def __repr__(self):
         return str(self)
@@ -1276,10 +1279,31 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
         """
         assert len(p.blocks) == 1
 
+        ''' ============== Functions for listing the variables in the program ============== '''
+
+        def vars_arg(a: x86.Arg) -> Set[x86.Var]:
+            if isinstance(a, (x86.Int, x86.Reg, x86.ByteReg, x86.GlobalVal, x86.Deref,
+                              x86.FunRef)):
+                return set()
+            elif isinstance(a, x86.Var):
+                return {a}
+            else:
+                raise Exception('vars_arg allocate_registers', a)
+
+        def vars_instr(e: x86.Instr) -> Set[x86.Var]:
+            if isinstance(e, (x86.Movq, x86.Addq, x86.Cmpq, x86.Movzbq, x86.Xorq, x86.Leaq)):
+                return vars_arg(e.e1).union(vars_arg(e.e2))
+            elif isinstance(e, (x86.Set, x86.Negq, x86.TailJmp, x86.IndirectCallq)):
+                return vars_arg(e.e1)
+            elif isinstance(e, (x86.Callq, x86.Retq, x86.Jmp, x86.JmpIf)):
+                return set()
+            else:
+                raise Exception('vars_instr allocate_registers', e)
+
         ''' ============== Functions for linear scan ============== '''
+
         # Defines the set of registers to use
-        register_locations = [x86.Reg(r) for r in
-                              constants.caller_saved_registers + constants.callee_saved_registers]
+        register_locations = [x86.Reg(r) for r in constants.caller_saved_registers + constants.callee_saved_registers]
         num_available = len(register_locations)
 
         # `active` is the list, sorted in order of increasing end point,
@@ -1291,19 +1315,33 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
 
             to_color = local_vars.copy()
 
+            # Init the live intervals
             # Loop through intervals by increasing startpoint
             live_intervals.sort(key=lambda int_: int_.startpoint)
             for interval in live_intervals:
+                ic(register_locations)
                 expire_old_intervals(interval)
                 if len(active) == num_available:
                     spill_at_interval(interval)
                 else:
                     # Take a register from the pool of free registers
-                    interval.location = register_locations.pop(-1)
+                    interval.color = register_locations.pop(-1)
                     active.append(interval)
 
                     # TODO if there's time: Make active a queue.PriorityQueue
                     active.sort(key=lambda int_: int_.endpoint)
+
+            # Init saturation sets
+            saturation_sets = {x: set() for x in local_vars}
+            for interval in live_intervals:
+                saturation_sets[interval.name].add(interval.color)
+
+            while to_color:
+                x = max(to_color, key=lambda x: len(saturation_sets[x]))
+                to_color.remove(x)
+
+                x_color = next(i for i in itertools.count() if i not in saturation_sets[x])
+                coloring[x] = x_color
 
             return coloring
 
@@ -1315,7 +1353,7 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
                 if j.endpoint >= i.endpoint:
                     return
                 active.remove(j)
-                register_locations.append(j.location)
+                register_locations.append(j.color)
 
         def spill_at_interval(i: LiveInterval) -> None:
             # Sort active by increasing end point
@@ -1323,12 +1361,12 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
             spill = active[-1]
             if spill.endpoint > i.endpoint:
                 #stack_spills += 1
-                i.location = spill.location
-                spill.location = make_stack_loc(0)
+                i.color = spill.color
+                spill.color = make_stack_loc(0)
                 active.remove(spill)
                 active.append(i)
             else:
-                i.location = make_stack_loc(0)
+                i.color = make_stack_loc(0)
 
         ''' ============== Functions for allocating registers ============== '''
 
@@ -1389,13 +1427,13 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
         local_vars = set()
         for block in blocks.values():
             for instr in block:
-                # TODO Figure out this line - need to get Set[x86.Var]
-                #                            \/
-                local_vars = local_vars.union()
+                local_vars = local_vars.union(vars_instr(instr))
 
         coloring = linear_scan_register_allocation(local_vars, live_intervals)
         color_map = dict(enumerate(register_locations))
         vec_color_map = dict(enumerate(register_locations))
+        ic(coloring)
+        ic(color_map)
 
         stack_spills = 0
         root_stack_spills = 0
@@ -1438,8 +1476,6 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
 
 ''' =============== allocate-registers: Graph Coloring =============== '''
 
-Color = int
-Coloring = Dict[x86.Var, Color]
 Saturation = Set[Color]
 
 class InterferenceGraph:
@@ -1563,6 +1599,7 @@ def allocate_registers_graph_coloring(inputs: Tuple[Dict[str, x86.Program],
             Tuple[x86.Program, int, int]:
 
         ''' ============== Functions for listing the variables in the program ============== '''
+
         def vars_arg(a: x86.Arg) -> Set[x86.Var]:
             if isinstance(a, (x86.Int, x86.Reg, x86.ByteReg, x86.GlobalVal, x86.Deref,
                               x86.FunRef)):
@@ -1594,7 +1631,7 @@ def allocate_registers_graph_coloring(inputs: Tuple[Dict[str, x86.Program],
             to_color = local_vars.copy()
             saturation_sets = {x: set() for x in local_vars}
 
-            # init the saturation sets
+            # Init the saturation sets
             for color, register in enumerate(register_locations):
                 for neighbor in interference_graph.neighbors(register):
                     if isinstance(neighbor, x86.Var):
@@ -1611,7 +1648,6 @@ def allocate_registers_graph_coloring(inputs: Tuple[Dict[str, x86.Program],
                     if isinstance(y, x86.Var):
                         saturation_sets[y].add(x_color)
 
-            ic(coloring)
             return coloring
 
         ''' ============== Functions for allocating registers ============== '''
@@ -1677,6 +1713,8 @@ def allocate_registers_graph_coloring(inputs: Tuple[Dict[str, x86.Program],
         coloring = color_graph(local_vars, interference_graph)
         color_map = dict(enumerate(register_locations))
         vec_color_map = dict(enumerate(register_locations))
+        ic(coloring)
+        ic(color_map)
 
         stack_spills = 0
         root_stack_spills = 0
