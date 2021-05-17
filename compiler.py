@@ -1109,12 +1109,15 @@ def allocate_registers(inputs: Tuple[Dict[str, x86.Program], Dict[str, List[Set[
     element is the number of variables spilled to the root (shadow) stack.
     """
 
-    if inputs[2] == 'graph_color':
-        return allocate_registers_gc(build_interference((inputs[0], inputs[1])))
-    elif inputs[2] == 'linear_scan':
-        return linear_scan(inputs[0])
+    p, live_after_sets, allocation_type = inputs
+
+    if allocation_type == 'graph_color':
+        return allocate_registers_gc(build_interference((p, live_after_sets)))
+    elif allocation_type == 'linear_scan':
+        p, defn_live_intervals = build_live_intervals(p)
+        return linear_scan(p, defn_live_intervals)
     else:
-        ic(inputs[2])
+        ic(allocation_type)
         raise Exception('allocate_registers')
 
 ##################################################
@@ -1167,7 +1170,6 @@ def build_interference(inputs: Tuple[Dict[str, x86.Program],
     The second is a dict mapping each function name to its completed
     interference graph.
     """
-
     defs, live_after_sets = inputs
 
     caller_saved_registers = [x86.Reg(r) for r in constants.caller_saved_registers]
@@ -1247,14 +1249,79 @@ class LiveInterval:
         self.location = location
 
     def __str__(self):
-        return f'"{self.name}": {self.startpoint}-{self.endpoint} (location={self.location})'
+        return f'`{self.name}`: ({self.startpoint}-{self.endpoint}), location={self.location}'
+
+    def __repr__(self):
+        return str(self)
 
 
-def linear_scan(defs: Dict[str, x86.Program]) -> \
+def build_live_intervals(p: Dict[str, x86.Program]) -> Tuple[Dict[str, x86.Program], Dict[str, List[LiveInterval]]]:
+    """
+    Map block names to a list of live intervals for the variables in that block.
+    :param p: A pseudo-x86 program
+    :return: A tuple. The first element is the original program as a dict mapping block names
+    to their program bodies. The second element is a dict mapping function/block names to a
+    list of LiveIntervals whose names are the names of the variables in that function/block
+    """
+
+    def build_live_intervals_def(p: x86.Program) -> List[LiveInterval]:
+        live_sets: List[Set[x86.Var]] = build_live_sets_def(p)
+        live_intervals: List[LiveInterval] = []
+
+        for line_num, live_set in enumerate(live_sets):
+            if live_set is None:
+                continue
+
+            # For all vars in the live_set, update their endpoint in live_intervals
+            # If they are not yet in live_intervals, add a new LiveIntervals for that var
+            for var in live_set:
+                for live_interval in live_intervals:
+                    if live_interval.name == var.var:
+                        live_interval.endpoint = line_num
+                        break  # If this break is not reached, else \/ will execute
+                else:
+                    # This var is not yet in the live_set
+                    # Make new LiveInterval with startpoint and endpoint as current line_num
+                    live_intervals.append(LiveInterval(var.var, line_num, line_num))
+
+        return live_intervals
+
+    def build_live_sets_def(p: x86.Program) -> List[Set[x86.Var]]:
+        assert len(p.blocks) == 1
+
+        block: Tuple[str, List[x86.Instr]] = [(name, instrs) for name, instrs in p.blocks.items()][0]
+        instrs: List[x86.Instr] = block[1]
+
+        live_sets = []
+        for instr in instrs:
+            live_sets.append(build_live_sets_instr(instr))
+
+        return live_sets
+
+    def build_live_sets_instr(instr: x86.Instr) -> Set[x86.Var]:
+        # TODO These types may need changing (?)
+        if isinstance(instr, (x86.Movq, x86.Addq, x86.Cmpq, x86.Movzbq, x86.Xorq, x86.Leaq)):
+            return build_live_sets_arg(instr.e1).union(build_live_sets_arg(instr.e2))
+        elif isinstance(instr, (x86.Set, x86.Negq, x86.TailJmp, x86.IndirectCallq)):
+            return build_live_sets_arg(instr.e1)
+
+    def build_live_sets_arg(a: x86.Arg) -> Set[x86.Var]:
+        if isinstance(a, (x86.Int, x86.Reg, x86.ByteReg, x86.GlobalVal, x86.Deref, x86.FunRef)):
+            return set()
+        elif isinstance(a, x86.Var):
+            return {a}
+        else:
+            raise ValueError('live_sets_arg linear_scan_help', a)
+
+    return p, {name: build_live_intervals_def(prog) for name, prog in p.items()}
+
+def linear_scan(defs: Dict[str, x86.Program], defs_live_intervals: Dict[str, List[LiveInterval]]) -> \
         Dict[str, Tuple[x86.Program, int, int]]:
     """
     Performs a linear scan register allocation algorithm for each named definition.
     :param defs: A dict mapping function names to pseudo-x86 assembly program definitions.
+    :param defs_live_intervals: A dict mapping function names to a list of LiveIntervals for
+    its variables.
 
     :return: A dict mapping each function name to a Tuple. The first element
     of each tuple is an x86 program (with no variable references). The second
@@ -1306,68 +1373,13 @@ def linear_scan(defs: Dict[str, x86.Program]) -> \
 
     def linear_scan_help(p: x86.Program) -> Tuple[x86.Program, int, int]:
         """
-        Perform a linear scan register allocation alg.
+        Perform a linear scan register allocation algorithm on a single block.
         :param p: A single x86.Program body
         :return: A Tuple. The first element is an x86 program (with no variable
             references). The second element is the number of bytes needed in regular
             stack locations. The third element is the number of variables spilled to
             the root (shadow) stack.
         """
-
-        # =============== Build Live Sets ===============
-        def live_sets_def(p: x86.Program) -> List[Set[x86.Var]]:
-            assert len(p.blocks) == 1
-
-            block: Tuple[str, List[x86.Instr]] = [(name, instrs) for name, instrs in p.blocks.items()][0]
-            instrs: List[x86.Instr] = block[1]
-
-            return live_sets_block(instrs)
-
-        def live_sets_block(instrs: List[x86.Instr]) -> List[Set[x86.Var]]:
-            result = []
-            for instr in instrs:
-                result.append(live_sets_instr(instr))
-
-            return result
-
-        def live_sets_instr(instr: x86.Instr) -> Set[x86.Var]:
-            # TODO These types may need changing (?)
-            if isinstance(instr, (x86.Movq, x86.Addq, x86.Cmpq, x86.Movzbq, x86.Xorq, x86.Leaq)):
-                return live_sets_arg(instr.e1).union(live_sets_arg(instr.e2))
-            elif isinstance(instr, (x86.Set, x86.Negq, x86.TailJmp, x86.IndirectCallq)):
-                return live_sets_arg(instr.e1)
-
-        def live_sets_arg(a: x86.Arg) -> Set[x86.Var]:
-            if isinstance(a, (x86.Int, x86.Reg, x86.ByteReg, x86.GlobalVal, x86.Deref, x86.FunRef)):
-                return set()
-            elif isinstance(a, x86.Var):
-                return {a}
-            else:
-                raise ValueError('live_sets_arg linear_scan_help', a)
-
-        # Get live set for each instruction. Element i is the
-        # set of variables in scope at instruction i (0-indexed)
-        live_sets = live_sets_def(p)
-
-        # Build LiveIntervals based on `live_sets`
-        live_intervals: List[LiveInterval] = []
-
-        live_set: Set[x86.Var]
-        for line_num, live_set in enumerate(live_sets):
-            var: x86.Var
-            for var in live_set:
-                if var.var in (interval.name for interval in live_intervals):
-                    # Update var in current live_set to have endpoint as current line_num
-                    # First get the LiveInterval ref corresponding to this var
-                    live_interval: LiveInterval
-                    for live_interval in live_intervals:
-                        if var.var == live_interval.name:
-                            live_interval.endpoint = line_num
-                else:
-                    # Make new LiveInterval with startpoint and endpoint as current line_num
-                    live_intervals.append(LiveInterval(var.var, line_num, line_num))
-
-        ic(live_intervals)
 
         # Active is the list, sorted in order of increasing end point, of live intervals
         # overlapping the current point and placed in registers
@@ -1387,13 +1399,13 @@ def linear_scan(defs: Dict[str, x86.Program]) -> \
                 if j.endpoint >= i.endpoint:
                     return
                 active.remove(j)
-                available.append(j.register)
+                available.append(j.location)
 
         def spill_at_interval(i: LiveInterval) -> None:
             active.sort(key=lambda interval: interval.endpoint)
             spill = active[-1]
             if spill.endpoint > i.endpoint:
-                i.register = spill.register
+                i.register = spill.location
                 spill.location = make_stack_loc(0)
                 active.remove(spill)
                 active.append(i)
