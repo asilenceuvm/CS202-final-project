@@ -1301,7 +1301,7 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
             active.sort(key=lambda interval: interval.endpoint)
             spill = active[-1]
             if spill.endpoint > i.endpoint:
-                i.register = spill.location
+                i.location = spill.location
                 spill.location = make_stack_loc(0)
                 active.remove(spill)
                 active.append(i)
@@ -1330,7 +1330,7 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
                 spill_at_interval(interval)
             else:
                 # Take a register from the pool of free registers
-                interval.register = available.pop(-1)
+                interval.location = available.pop(-1)
                 active.append(interval)
 
                 # TODO Make active a queue.PriorityQueue ?
