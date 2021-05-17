@@ -1,5 +1,5 @@
 from collections import OrderedDict, defaultdict
-from typing import List, Set, Dict, Tuple, DefaultDict, Union
+from typing import List, Set, Dict, Tuple, DefaultDict, Union, ItemsView
 import itertools
 import textwrap
 
@@ -1062,7 +1062,6 @@ def uncover_live(program: Dict[str, x86.Program]) -> \
     for name in program.keys():
         ul_block(name + '_start')
 
-    ic(live_after_sets)
     return program, live_after_sets
 
 
@@ -1082,13 +1081,12 @@ def select_allocation(inputs: Tuple[Dict[str, x86.Program], Dict[str, List[Set[x
     :return: A tuple. The first element is the same as the input program.
         The second element is a string stating the recommended register allocation method.
     """
-    ic(inputs)
     if len(sys.argv) > 2:
         allocation_type = str(sys.argv[2])
     else:
         # Default to graph coloring
-        allocation_type = "graph_color"
-    ic(allocation_type)
+        # allocation_type = "graph_color"
+        allocation_type = "linear_scan"
 
     return inputs[0], inputs[1], allocation_type
 
@@ -1110,9 +1108,6 @@ def allocate_registers(inputs: Tuple[Dict[str, x86.Program], Dict[str, List[Set[
     element is the number of bytes needed in regular stack locations. The third
     element is the number of variables spilled to the root (shadow) stack.
     """
-
-    ic('allocate_regs')
-    ic(inputs)
 
     if inputs[2] == 'graph_color':
         return allocate_registers_gc(build_interference((inputs[0], inputs[1])))
@@ -1217,7 +1212,7 @@ def build_interference(inputs: Tuple[Dict[str, x86.Program],
         for instr, live_after in zip(instrs, live_afters):
             bi_instr(instr, live_after, graph)
 
-    def bi_def(name: str, p: x86.Program) -> InterferenceGraph:
+    def bi_def(p: x86.Program) -> InterferenceGraph:
         blocks = p.blocks
 
         interference_graph = InterferenceGraph()
@@ -1227,7 +1222,7 @@ def build_interference(inputs: Tuple[Dict[str, x86.Program],
 
         return interference_graph
 
-    interference_graphs = {name: bi_def(name, p) for name, p in defs.items()}
+    interference_graphs = {name: bi_def(p) for name, p in defs.items()}
 
     return defs, interference_graphs
 
@@ -1243,14 +1238,13 @@ class LiveInterval:
     name: str
     startpoint: int
     endpoint: int
-    register: x86.Reg
     location: Union[x86.Reg, x86.Deref]
 
-    def __init__(self, startpoint: int, endpoint: int, location: Union[x86.Reg, x86.Deref], name: str):
+    def __init__(self, name: str, startpoint: int, endpoint: int, location: Union[x86.Reg, x86.Deref, None] = None):
+        self.name = name
         self.startpoint = startpoint
         self.endpoint = endpoint
         self.location = location
-        self.name = name
 
     def __str__(self):
         return f'"{self.name}": {self.startpoint}-{self.endpoint} (location={self.location})'
@@ -1310,30 +1304,82 @@ def linear_scan(defs: Dict[str, x86.Program]) -> \
     
     '''
 
-    # avail == caller_saved_registers
-    def linear_scan_help(p: x86.Program) -> \
-            Tuple[x86.Program, int, int]:
+    def linear_scan_help(p: x86.Program) -> Tuple[x86.Program, int, int]:
         """
         Perform a linear scan register allocation alg.
-        :param p:
+        :param p: A single x86.Program body
         :return: A Tuple. The first element is an x86 program (with no variable
             references). The second element is the number of bytes needed in regular
             stack locations. The third element is the number of variables spilled to
             the root (shadow) stack.
         """
 
+        # =============== Build Live Sets ===============
+        def live_sets_def(p: x86.Program) -> List[Set[x86.Var]]:
+            assert len(p.blocks) == 1
+
+            block: Tuple[str, List[x86.Instr]] = [(name, instrs) for name, instrs in p.blocks.items()][0]
+            instrs: List[x86.Instr] = block[1]
+
+            return live_sets_block(instrs)
+
+        def live_sets_block(instrs: List[x86.Instr]) -> List[Set[x86.Var]]:
+            result = []
+            for instr in instrs:
+                result.append(live_sets_instr(instr))
+
+            return result
+
+        def live_sets_instr(instr: x86.Instr) -> Set[x86.Var]:
+            # TODO These types may need changing (?)
+            if isinstance(instr, (x86.Movq, x86.Addq, x86.Cmpq, x86.Movzbq, x86.Xorq, x86.Leaq)):
+                return live_sets_arg(instr.e1).union(live_sets_arg(instr.e2))
+            elif isinstance(instr, (x86.Set, x86.Negq, x86.TailJmp, x86.IndirectCallq)):
+                return live_sets_arg(instr.e1)
+
+        def live_sets_arg(a: x86.Arg) -> Set[x86.Var]:
+            if isinstance(a, (x86.Int, x86.Reg, x86.ByteReg, x86.GlobalVal, x86.Deref, x86.FunRef)):
+                return set()
+            elif isinstance(a, x86.Var):
+                return {a}
+            else:
+                raise ValueError('live_sets_arg linear_scan_help', a)
+
+        # Get live set for each instruction. Element i is the
+        # set of variables in scope at instruction i (0-indexed)
+        live_sets = live_sets_def(p)
+
+        # Build LiveIntervals based on `live_sets`
+        live_intervals: List[LiveInterval] = []
+
+        live_set: Set[x86.Var]
+        for line_num, live_set in enumerate(live_sets):
+            var: x86.Var
+            for var in live_set:
+                if var.var in (interval.name for interval in live_intervals):
+                    # Update var in current live_set to have endpoint as current line_num
+                    # First get the LiveInterval ref corresponding to this var
+                    live_interval: LiveInterval
+                    for live_interval in live_intervals:
+                        if var.var == live_interval.name:
+                            live_interval.endpoint = line_num
+                else:
+                    # Make new LiveInterval with startpoint and endpoint as current line_num
+                    live_intervals.append(LiveInterval(var.var, line_num, line_num))
+
+        ic(live_intervals)
+
         # Active is the list, sorted in order of increasing end point, of live intervals
         # overlapping the current point and placed in registers
         active: List[LiveInterval] = []
-        live_interval: List[LiveInterval] = []  # live intervals
 
-
-        # caller_saved_registers = [x86.Reg(r) for r in constants.caller_saved_registers]
-        # callee_saved_registers = [x86.Reg(r) for r in constants.callee_saved_registers]
         available = [x86.Reg(r) for r in constants.caller_saved_registers + constants.callee_saved_registers]
-        active: List[LiveInterval] = []  # active is the list, sorted in order of increasing end point,
+        num_available = len(available)
+
+        # `active` is the list, sorted in order of increasing end point,
         # of live intervals overlapping the current point and placed in registers
-        live_interval: List[LiveInterval] = []  # live intervals
+        active: List[LiveInterval] = []
+        live_intervals: List[LiveInterval] = []
 
         def expire_old_intervals(i: LiveInterval) -> None:
             active.sort(key=lambda x: x.endpoint)
@@ -1354,7 +1400,38 @@ def linear_scan(defs: Dict[str, x86.Program]) -> \
             else:
                 i.location = make_stack_loc(0)
 
+        '''
+        LinearScanRegisterAllocation
+            active ←{}
+            foreach live interval i, in order of increasing start point
+                ExpireOldIntervals(i)
+                if length(active) = R then
+                    SpillAtInterval(i)
+                else
+                    register[i] ← a register removed from pool of free registers
+                    add i to active, sorted by increasing end point
+        '''
+
+        live_intervals.sort(key=lambda int_: int_.startpoint)
+        ic('sorted live_intervals')
+        ic(live_intervals)
+        for interval in live_intervals:
+            expire_old_intervals(interval)
+            if len(active) == num_available:
+                spill_at_interval(interval)
+            else:
+                interval.register = available.pop(-1)
+                active.append(interval)
+                # TODO Make active a queue.PriorityQueue ?
+                active.sort(key=lambda int_: int_.endpoint)
+
         # TODO Return a Tuple[x86.Program, int, int]
+
+        # blocks = p.blocks
+        # new_blocks = {label: ah_block(block) for label, block in blocks.items()}
+        # return x86.Program(new_blocks), align(8 * stack_spills), root_stack_spills
+
+
         return None
 
     def make_stack_loc(offset: int) -> x86.Deref:
@@ -1362,8 +1439,8 @@ def linear_scan(defs: Dict[str, x86.Program]) -> \
 
     results: Dict[str, Tuple[x86.Program, int, int]] = {}
 
-    for name, program in defs.items():
-        results[name] = linear_scan_help(program)
+    for name, body in defs.items():
+        results[name] = linear_scan_help(body)
 
     ic(results)
     return results
