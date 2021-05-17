@@ -14,6 +14,9 @@ import cs202_support.x86exp as x86
 import cfun
 import constants
 
+# TODO Remove
+from icecream import ic
+
 gensym_num = 0
 
 
@@ -31,11 +34,12 @@ def unzip2(ls):
     of the second elements of the pairs in ls.
     """
 
-    if ls == []:
+    if not ls:
         return [], []
     else:
         xs, ys = zip(*ls)
         return list(xs), list(ys)
+
 
 ##################################################
 # typecheck
@@ -46,7 +50,7 @@ TEnv = Dict[str, RfunType]
 def typecheck(p: RfunProgram) -> RfunProgramT:
     """
     Typechecks the input program; throws an error if the program is not well-typed.
-    :param e: The Rfun program to typecheck
+    :param p: The Rfun program to typecheck
     :return: The program, if it is well-typed
     """
 
@@ -177,7 +181,7 @@ def typecheck(p: RfunProgram) -> RfunProgramT:
 def shrink(p: RfunProgramT) -> RfunProgramT:
     """
     Eliminates some operators from Rfun
-    :param e: The Rfun program to shrink
+    :param p: The Rfun program to shrink
     :return: A shrunken Rfun program
     """
 
@@ -238,7 +242,7 @@ def shrink(p: RfunProgramT) -> RfunProgramT:
 def uniquify(p: RfunProgramT) -> RfunProgramT:
     """
     Makes the program's variable names unique
-    :param e: The Rfun program to uniquify
+    :param p: The Rfun program to uniquify
     :return: An Rfun program with unique names
     """
 
@@ -295,7 +299,7 @@ def reveal_functions(p: RfunProgramT) -> RfunProgramT:
     """
     Transform references to top-level functions from variable references to
     function references.
-    :param e: An Rfun program
+    :param p: An Rfun program
     :return: An Rfun program in which all references to top-level functions
     are in the form of FunRef objects.
     """
@@ -350,7 +354,7 @@ def reveal_functions(p: RfunProgramT) -> RfunProgramT:
 def limit_functions(p: RfunProgramT) -> RfunProgramT:
     """
     Limit functions to have at most 6 arguments.
-    :param e: An Rfun program to reveal_functions
+    :param p: An Rfun program to reveal_functions
     :return: An Rfun program, in which each function has at most 6 arguments
     """
 
@@ -458,8 +462,8 @@ def expose_alloc(p: RfunProgramT) -> RfunProgramT:
     """
     Transforms 'vector' forms into explicit memory allocations, with conditional
     calls to the garbage collector.
-    :param e: A typed Rfun expression
-    :return: A typed Rfun expression, without 'vector' forms
+    :param p: A typed Rfun program
+    :return: A typed Rfun program, without 'vector' forms
     """
 
     def ea_def(defn: RfunDefT) -> RfunDefT:
@@ -553,8 +557,8 @@ def rco(p: RfunProgramT) -> RfunProgramT:
     """
     Removes complex operands. After this pass, the program will be in A-Normal
     Form (the arguments to Prim operations will be atomic).
-    :param e: An Rfun expression
-    :return: An Rfun expression in A-Normal Form
+    :param p: An Rfun program
+    :return: An Rfun program in A-Normal Form
     """
 
     def rco_def(defn: RfunDefT) -> RfunDefT:
@@ -573,7 +577,7 @@ def rco(p: RfunProgramT) -> RfunProgramT:
         elif isinstance(e, GlobalValTE):
             new_v = gensym('tmp')
             bindings[new_v] = e
-            return VarTE(new_v, IntT()) # all global vals are ints
+            return VarTE(new_v, IntT())  # all global vals are ints
         elif isinstance(e, LetTE):
             new_e1 = rco_exp(e.e1)
             bindings[e.x] = new_e1
@@ -641,7 +645,7 @@ def rco(p: RfunProgramT) -> RfunProgramT:
 def explicate_control(p: RfunProgramT) -> cfun.Program:
     """
     Transforms an Rfun Program into a Cfun program.
-    :param e: An Rfun Program
+    :param p: An Rfun Program
     :return: A Cfun Program
     """
 
@@ -807,9 +811,9 @@ def select_instructions(p: cfun.Program) -> Dict[str, x86.Program]:
         if isinstance(a, cfun.Int):
             return x86.Int(a.val)
         if isinstance(a, cfun.Bool):
-            if a.val == True:
+            if a.val:
                 return x86.Int(1)
-            elif a.val == False:
+            elif not a.val:
                 return x86.Int(0)
             else:
                 raise Exception('si_atm', a)
@@ -849,7 +853,7 @@ def select_instructions(p: cfun.Program) -> Dict[str, x86.Program]:
 
         # shift the pointer mask by 6 bits to make room for the length field
         mask_and_len = pointer_mask << 6
-        mask_and_len = mask_and_len + len(types) # add the length
+        mask_and_len = mask_and_len + len(types)  # add the length
 
         # shift the mask and length by 1 bit to make room for the forwarding bit
         tag = mask_and_len << 1
@@ -951,7 +955,7 @@ def select_instructions(p: cfun.Program) -> Dict[str, x86.Program]:
                      x86.JmpIf(e.test.op, e.then_label),
                      x86.Jmp(e.else_label) ]
         elif isinstance(e, cfun.Goto):
-            return [ x86.Jmp(e.label) ]
+            return [x86.Jmp(e.label)]
         elif isinstance(e, cfun.TailCall):
             param_instrs: List[x86.Instr] = \
                 [x86.Movq(si_atm(arg), x86.Reg(reg)) for arg, reg in
@@ -1024,7 +1028,7 @@ def uncover_live(program: Dict[str, x86.Program]) -> \
             return live_after.difference(vars_arg(e.e2)).union(vars_arg(e.e1))
         elif isinstance(e, (x86.Addq, x86.Xorq)):
             return live_after.union(vars_arg(e.e1).union(vars_arg(e.e2)))
-        elif isinstance(e, (x86.Negq)):
+        elif isinstance(e, x86.Negq):
             return live_after.union(vars_arg(e.e1))
         elif isinstance(e, (x86.Callq, x86.Retq, x86.Set)):
             return live_after
@@ -1058,7 +1062,7 @@ def uncover_live(program: Dict[str, x86.Program]) -> \
     for name in program.keys():
         ul_block(name + '_start')
 
-    print(live_after_sets)
+    ic(live_after_sets)
     return program, live_after_sets
 
 
@@ -1067,24 +1071,26 @@ def uncover_live(program: Dict[str, x86.Program]) -> \
 ##################################################
 
 def select_allocation(inputs: Tuple[Dict[str, x86.Program], Dict[str, List[Set[x86.Var]]]]) -> \
-        Tuple[Dict[str, x86.Program], str, Dict[str, List[Set[x86.Var]]]]:
+        Tuple[Dict[str, x86.Program], Dict[str, List[Set[x86.Var]]], str]:
     """
     Performs machine learning analysis on what allocation type the compiler should use.
     Returns the input program plus the recommended allocation method.
-    :param program: pseudo-x86 assembly program definitions
+    :param inputs: A tuple. The first element is the input program. The
+        second element is a dict of live-after sets. This dict maps each label in
+        the program to a list of live-after sets for that label. The live-after
+        sets are in the same order as the label's instructions.
     :return: A tuple. The first element is the same as the input program.
-    The second element is a string with the recommended register allocation method
+        The second element is a string stating the recommended register allocation method.
     """
-    print(type(inputs))
+    ic(inputs)
     if len(sys.argv) > 2:
         allocation_type = str(sys.argv[2])
     else:
-        #default to graph coloring
+        # Default to graph coloring
         allocation_type = "graph_color"
-    print(allocation_type)
+    ic(allocation_type)
 
-    #TODO: implement allocation type selection
-    return (inputs[0], allocation_type, inputs[1])
+    return inputs[0], inputs[1], allocation_type
 
 ##################################################
 # allocate-registers
@@ -1104,7 +1110,6 @@ def allocate_registers(inputs: Tuple[Dict[str, x86.Program], str, Dict[str, List
     element is the number of bytes needed in regular stack locations. The third
     element is the number of variables spilled to the root (shadow) stack.
     """
-    print(inputs)
     if inputs[1] == 'graph_color':
         return allocate_registers_gc(build_interference((inputs[0], inputs[2])))
     elif inputs[1] == 'linear_scan':
@@ -1223,7 +1228,6 @@ def build_interference(inputs: Tuple[Dict[str, x86.Program],
     return defs, interference_graphs
 
 
-
 ##################################################
 # linear-scan
 ##################################################
@@ -1232,43 +1236,35 @@ class LiveInterval:
     """
     Helper class to represent live intervals
     """
-    name : str
+    name: str
     startpoint: int
     endpoint: int
-    register : x86.Reg
-    location : x86.Deref
+    register: x86.Reg
+    location: Union[x86.Reg, x86.Deref]
 
-    def __init__(self):
-        startpoint = 0
-        endpoint = 0
-        register = x86.Reg('')
-        location = x86.Deref('')
-        name = ''
-
-    def set_startpoint(self, startpoint):
+    def __init__(self, startpoint: int, endpoint: int, location: Union[x86.Reg, x86.Deref], name: str):
         self.startpoint = startpoint
-
-    def set_endpoint(self, endpoint):
         self.endpoint = endpoint
+        self.location = location
+        self.name = name
 
     def __str__(self):
-        return f'{self.startpoint} {self.endpoint}'
+        return f'"{self.name}": {self.startpoint}-{self.endpoint} (location={self.location})'
 
 
 def linear_scan(inputs: Tuple[Dict[str, x86.Program],
-                                     Dict[str, InterferenceGraph]]) -> \
-    Dict[str, Tuple[x86.Program, int, int]]:
+                              Dict[str, InterferenceGraph]]) -> \
+        Dict[str, Tuple[x86.Program, int, int]]:
     """
-    Assigns homes to variables in the input program. Allocates registers and
-    stack locations as needed, based on the linear scan algorithm.
-    :param program: pseudo-x86 assembly program definitions
+    Performs a linear scan register allocation algorithm
+    :param: inputs: pseudo-x86 assembly program definitions
 
     :return: A dict mapping each function name to a Tuple. The first element
     of each tuple is an x86 program (with no variable references). The second
     element is the number of bytes needed in regular stack locations. The third
     element is the number of variables spilled to the root (shadow) stack.
     """
-    #TODO: implement linear scan algorithm
+
     '''
     https://www.cs.rice.edu/~vs3/PDF/cc2007.pdf
     //checking for feasible solution
@@ -1308,30 +1304,33 @@ def linear_scan(inputs: Tuple[Dict[str, x86.Program],
         Treat the move instructions in M as a directed graph G in which there is an edge from move instruction m1 to move instruction m2 if m1 reads the register written by m2
         Compute the strongly connected components (SCC’s) of directed graph G
         For each SCC, create a sequence of move and xor instructions to implement its register moves without the use of a temporary register, and insert these instructions on the control flow edge from P to Q(as part of Output 3 in Figure 3)\
+    
+    '''
 
-	'''
-
-    #avail == caller_saved_registers
+    # avail == caller_saved_registers
     def linear_scan_help(inputs: Tuple[x86.Program, InterferenceGraph]) -> \
-        Tuple[x86.Program, int, int]:
+            Tuple[x86.Program, int, int]:
 
-        active: List[LiveInterval] = []  # active is the list, sorted in order of increasing end point, of live intervals overlapping the current point and placed in registers
+        # Active is the list, sorted in order of increasing end point, of live intervals
+        # overlapping the current point and placed in registers
+        active: List[LiveInterval] = []
         live_interval: List[LiveInterval] = []  # live intervals
 
 
-        #caller_saved_registers = [x86.Reg(r) for r in constants.caller_saved_registers]
-        #callee_saved_registers = [x86.Reg(r) for r in constants.callee_saved_registers]
+        # caller_saved_registers = [x86.Reg(r) for r in constants.caller_saved_registers]
+        # callee_saved_registers = [x86.Reg(r) for r in constants.callee_saved_registers]
         available = [x86.Reg(r) for r in constants.caller_saved_registers + constants.callee_saved_registers]
-        active : List[LiveInterval] = [] # active is the list, sorted in order of increasing end point, of live intervals overlapping the current point and placed in registers
-        live_interval : List[LiveInterval] = [] # live intervals
+        active: List[LiveInterval] = []  # active is the list, sorted in order of increasing end point,
+        # of live intervals overlapping the current point and placed in registers
+        live_interval: List[LiveInterval] = []  # live intervals
 
         def expire_old_intervals(i : LiveInterval):
             active.sort(key=lambda x: x.endpoint)
-            for j in active: #sort active by increasing end point
+            for j in active:  # sort active by increasing end point
                 if j.endpoint >= i.endpoint:
                     return
                 active.remove(j)
-                available.add(j.register)
+                available.append(j.register)
 
         def spill_at_interval(i: LiveInterval):
             active.sort(key=lambda x: x.endpoint)
@@ -1343,7 +1342,6 @@ def linear_scan(inputs: Tuple[Dict[str, x86.Program],
                 active += [i]
             else:
                 i.location = make_stack_loc(0)
-
 
     def make_stack_loc(offset):
         return x86.Deref(-(offset * 8), 'rbp')
@@ -1359,19 +1357,17 @@ def linear_scan(inputs: Tuple[Dict[str, x86.Program],
     return results
 
 
-
 ##################################################
 # allocate-registers
 ##################################################
-
 
 Color = int
 Coloring = Dict[x86.Var, Color]
 Saturation = Set[Color]
 
 def allocate_registers_gc(inputs: Tuple[Dict[str, x86.Program],
-                                     Dict[str, InterferenceGraph]]) -> \
-    Dict[str, Tuple[x86.Program, int, int]]:
+                                        Dict[str, InterferenceGraph]]) -> \
+        Dict[str, Tuple[x86.Program, int, int]]:
     """
     Assigns homes to variables in the input program. Allocates registers and
     stack locations as needed, based on a graph-coloring register allocation
@@ -1398,7 +1394,7 @@ def allocate_registers_gc(inputs: Tuple[Dict[str, x86.Program],
 def allocate_registers_help(inputs: Tuple[x86.Program, InterferenceGraph]) -> \
         Tuple[x86.Program, int, int]:
 
-    ## Functions for listing the variables in the program
+    # Functions for listing the variables in the program
     def vars_arg(a: x86.Arg) -> Set[x86.Var]:
         if isinstance(a, (x86.Int, x86.Reg, x86.ByteReg, x86.GlobalVal, x86.Deref,
                           x86.FunRef)):
@@ -1422,7 +1418,7 @@ def allocate_registers_help(inputs: Tuple[x86.Program, InterferenceGraph]) -> \
     register_locations = [x86.Reg(r) for r in
                           constants.caller_saved_registers + constants.callee_saved_registers]
 
-    ## Functions for graph coloring
+    # Functions for graph coloring
     def color_graph(local_vars: Set[x86.Var], interference_graph: InterferenceGraph) -> Coloring:
         coloring = {}
 
@@ -1553,7 +1549,7 @@ def allocate_registers_help(inputs: Tuple[x86.Program, InterferenceGraph]) -> \
 ##################################################
 
 def patch_instructions(inputs: Dict[str, Tuple[x86.Program, int, int]]) -> \
-    Dict[str, Tuple[x86.Program, int, int]]:
+        Dict[str, Tuple[x86.Program, int, int]]:
     """
     Patches instructions with two memory location inputs, using %rax as a
     temporary location.
@@ -1610,7 +1606,7 @@ def patch_instructions_help(inputs: Tuple[x86.Program, int, int]) -> Tuple[x86.P
     program, stack_size, root_stack_spills = inputs
     blocks = program.blocks
     new_blocks = {label: pi_block(block) for label, block in blocks.items()}
-    return (x86.Program(new_blocks), stack_size, root_stack_spills)
+    return x86.Program(new_blocks), stack_size, root_stack_spills
 
 
 ##################################################
@@ -1655,9 +1651,9 @@ def print_x86_help(name: str, inputs: Tuple[x86.Program, int, int]) -> str:
 
     ccs = {
         '==': 'e',
-        '<' : 'l',
+        '<': 'l',
         '<=': 'le',
-        '>' : 'g',
+        '>': 'g',
         '>=': 'ge'
     }
 
@@ -1783,8 +1779,8 @@ compiler_passes = {
     'uncover live': uncover_live,
     'select allocation': select_allocation,
     'allocate registers': allocate_registers,
-    #'build interference': build_interference,
-    #'allocate registers': allocate_registers_gc,
+    # 'build interference': build_interference,
+    # 'allocate registers': allocate_registers_gc,
     'patch instructions': patch_instructions,
     'print x86': print_x86
 }
@@ -1799,7 +1795,7 @@ def run_compiler(s: str, logging=False) -> str:
     """
     current_program = parse_rfun(s)
 
-    if logging == True:
+    if logging:
         print()
         print('==================================================')
         print(' Input program')
@@ -1810,7 +1806,7 @@ def run_compiler(s: str, logging=False) -> str:
     for pass_name, pass_fn in compiler_passes.items():
         current_program = pass_fn(current_program)
 
-        if logging == True:
+        if logging:
             print()
             print('==================================================')
             print(f' Output of pass: {pass_name}')
