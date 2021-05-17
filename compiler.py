@@ -1112,10 +1112,10 @@ def allocate_registers(inputs: Tuple[Dict[str, x86.Program], Dict[str, List[Set[
     p, live_after_sets, allocation_type = inputs
 
     if allocation_type == 'graph_color':
-        return allocate_registers_gc(build_interference((p, live_after_sets)))
+        return allocate_registers_graph_coloring(build_interference((p, live_after_sets)))
     elif allocation_type == 'linear_scan':
         p, defn_live_intervals = build_live_intervals(p)
-        return linear_scan(p, defn_live_intervals)
+        return allocate_registers_linear_scan(p, defn_live_intervals)
     else:
         ic(allocation_type)
         raise Exception('allocate_registers')
@@ -1230,8 +1230,10 @@ def build_interference(inputs: Tuple[Dict[str, x86.Program],
 
 
 ##################################################
-# linear-scan
+# allocate-registers
 ##################################################
+
+''' =============== allocate-registers: Linear Scan =============== '''
 
 class LiveInterval:
     """
@@ -1253,7 +1255,6 @@ class LiveInterval:
 
     def __repr__(self):
         return str(self)
-
 
 def build_live_intervals(p: Dict[str, x86.Program]) -> Tuple[Dict[str, x86.Program], Dict[str, List[LiveInterval]]]:
     """
@@ -1315,7 +1316,7 @@ def build_live_intervals(p: Dict[str, x86.Program]) -> Tuple[Dict[str, x86.Progr
 
     return p, {name: build_live_intervals_def(prog) for name, prog in p.items()}
 
-def linear_scan(defs: Dict[str, x86.Program], defs_live_intervals: Dict[str, List[LiveInterval]]) -> \
+def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_intervals: Dict[str, List[LiveInterval]]) -> \
         Dict[str, Tuple[x86.Program, int, int]]:
     """
     Performs a linear scan register allocation algorithm for each named definition.
@@ -1371,7 +1372,7 @@ def linear_scan(defs: Dict[str, x86.Program], defs_live_intervals: Dict[str, Lis
     
     '''
 
-    def linear_scan_help(p: x86.Program) -> Tuple[x86.Program, int, int]:
+    def linear_scan_def(p: x86.Program) -> Tuple[x86.Program, int, int]:
         """
         Perform a linear scan register allocation algorithm on a single block.
         :param p: A single x86.Program body
@@ -1437,8 +1438,8 @@ def linear_scan(defs: Dict[str, x86.Program], defs_live_intervals: Dict[str, Lis
                 # TODO Make active a queue.PriorityQueue ?
                 active.sort(key=lambda int_: int_.endpoint)
 
-        # TODO Return a Tuple[x86.Program, int, int]
-
+        # TODO Return a Tuple[x86.Program, int, int] - how????????
+        # >>> How assign_homes does it:
         # blocks = p.blocks
         # new_blocks = {label: ah_block(block) for label, block in blocks.items()}
         # return x86.Program(new_blocks), align(8 * stack_spills), root_stack_spills
@@ -1449,25 +1450,18 @@ def linear_scan(defs: Dict[str, x86.Program], defs_live_intervals: Dict[str, Lis
     def make_stack_loc(offset: int) -> x86.Deref:
         return x86.Deref(-(offset * 8), 'rbp')
 
-    results: Dict[str, Tuple[x86.Program, int, int]] = {}
-
-    for name, body in defs.items():
-        results[name] = linear_scan_help(body)
-
+    results = {name: linear_scan_def(prog) for name, prog in defs.items()}
     ic(results)
     return results
 
-
-##################################################
-# allocate-registers
-##################################################
+''' =============== allocate-registers: Graph Coloring =============== '''
 
 Color = int
 Coloring = Dict[x86.Var, Color]
 Saturation = Set[Color]
 
-def allocate_registers_gc(inputs: Tuple[Dict[str, x86.Program],
-                                        Dict[str, InterferenceGraph]]) -> \
+def allocate_registers_graph_coloring(inputs: Tuple[Dict[str, x86.Program],
+                                                    Dict[str, InterferenceGraph]]) -> \
         Dict[str, Tuple[x86.Program, int, int]]:
     """
     Assigns homes to variables in the input program. Allocates registers and
@@ -1482,6 +1476,157 @@ def allocate_registers_gc(inputs: Tuple[Dict[str, x86.Program],
     element is the number of variables spilled to the root (shadow) stack.
     """
 
+    def allocate_registers_help(inputs: Tuple[x86.Program, InterferenceGraph]) -> \
+            Tuple[x86.Program, int, int]:
+
+        # Functions for listing the variables in the program
+        def vars_arg(a: x86.Arg) -> Set[x86.Var]:
+            if isinstance(a, (x86.Int, x86.Reg, x86.ByteReg, x86.GlobalVal, x86.Deref,
+                              x86.FunRef)):
+                return set()
+            elif isinstance(a, x86.Var):
+                return {a}
+            else:
+                raise Exception('vars_arg allocate_registers', a)
+
+        def vars_instr(e: x86.Instr) -> Set[x86.Var]:
+            if isinstance(e, (x86.Movq, x86.Addq, x86.Cmpq, x86.Movzbq, x86.Xorq, x86.Leaq)):
+                return vars_arg(e.e1).union(vars_arg(e.e2))
+            elif isinstance(e, (x86.Set, x86.Negq, x86.TailJmp, x86.IndirectCallq)):
+                return vars_arg(e.e1)
+            elif isinstance(e, (x86.Callq, x86.Retq, x86.Jmp, x86.JmpIf)):
+                return set()
+            else:
+                raise Exception('vars_instr allocate_registers', e)
+
+        # Defines the set of registers to use
+        register_locations = [x86.Reg(r) for r in
+                              constants.caller_saved_registers + constants.callee_saved_registers]
+
+        # Functions for graph coloring
+        def color_graph(local_vars: Set[x86.Var], interference_graph: InterferenceGraph) -> Coloring:
+            coloring = {}
+
+            to_color = local_vars.copy()
+            saturation_sets = {x: set() for x in local_vars}
+
+            # init the saturation sets
+            for color, register in enumerate(register_locations):
+                for neighbor in interference_graph.neighbors(register):
+                    if isinstance(neighbor, x86.Var):
+                        saturation_sets[neighbor].add(color)
+
+            while to_color:
+                x = max(to_color, key=lambda x: len(saturation_sets[x]))
+                to_color.remove(x)
+
+                x_color = next(i for i in itertools.count() if i not in saturation_sets[x])
+                coloring[x] = x_color
+
+                for y in interference_graph.neighbors(x):
+                    if isinstance(y, x86.Var):
+                        saturation_sets[y].add(x_color)
+
+            return coloring
+
+        # Functions for allocating registers
+        def make_stack_loc(offset):
+            return x86.Deref(-(offset * 8), 'rbp')
+
+        # Functions for replacing variables with their homes
+        homes: Dict[x86.Var, x86.Arg] = {}
+
+        def ah_arg(a: x86.Arg) -> x86.Arg:
+            if isinstance(a, (x86.Int, x86.Reg, x86.ByteReg, x86.Deref,
+                              x86.GlobalVal, x86.FunRef)):
+                return a
+            elif isinstance(a, x86.Var):
+                return homes[a]
+            else:
+                raise Exception('ah_arg', a)
+
+        def ah_instr(e: x86.Instr) -> x86.Instr:
+            if isinstance(e, x86.Movq):
+                return x86.Movq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Addq):
+                return x86.Addq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Cmpq):
+                return x86.Cmpq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Movzbq):
+                return x86.Movzbq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Xorq):
+                return x86.Xorq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Negq):
+                return x86.Negq(ah_arg(e.e1))
+            elif isinstance(e, x86.Leaq):
+                return x86.Leaq(ah_arg(e.e1), ah_arg(e.e2))
+            elif isinstance(e, x86.Set):
+                return x86.Set(e.cc, ah_arg(e.e1))
+            elif isinstance(e, x86.TailJmp):
+                return x86.TailJmp(ah_arg(e.e1), e.num_args)
+            elif isinstance(e, x86.IndirectCallq):
+                return x86.IndirectCallq(ah_arg(e.e1), e.num_args)
+            elif isinstance(e, (x86.Callq, x86.Retq, x86.Jmp, x86.JmpIf)):
+                return e
+            else:
+                raise Exception('ah_instr', e)
+
+        def ah_block(instrs: List[x86.Instr]) -> List[x86.Instr]:
+            return [ah_instr(i) for i in instrs]
+
+        def align(num_bytes: int) -> int:
+            if num_bytes % 16 == 0:
+                return num_bytes
+            else:
+                return num_bytes + (16 - (num_bytes % 16))
+
+        # Main body of the pass
+        program, interference_graph = inputs
+        blocks = program.blocks
+
+        local_vars = set()
+        for block in blocks.values():
+            for instr in block:
+                local_vars = local_vars.union(vars_instr(instr))
+
+        coloring = color_graph(local_vars, interference_graph)
+        color_map = dict(enumerate(register_locations))
+        vec_color_map = dict(enumerate(register_locations))
+
+        stack_spills = 0
+        root_stack_spills = 0
+
+        # fill in locations in the color map
+        for v in local_vars:
+            if isinstance(v, x86.VecVar):
+                color = coloring[v]
+                if color in vec_color_map:
+                    pass
+                else:
+                    root_stack_spills += 1
+                    offset = root_stack_spills
+                    vec_color_map[color] = x86.Deref(-(offset * 8), 'r15')
+            elif isinstance(v, x86.Var):
+                color = coloring[v]
+                if color in color_map:
+                    pass
+                else:
+                    stack_spills += 1
+                    offset = stack_spills + 1
+                    color_map[color] = x86.Deref(-(offset * 8), 'rbp')
+
+        # build "homes"
+        for v in local_vars:
+            color = coloring[v]
+            if isinstance(v, x86.VecVar):
+                homes[v] = vec_color_map[color]
+            elif isinstance(v, x86.Var):
+                homes[v] = color_map[color]
+
+        blocks = program.blocks
+        new_blocks = {label: ah_block(block) for label, block in blocks.items()}
+        return x86.Program(new_blocks), align(8 * stack_spills), root_stack_spills
+
     defs, interference_graphs = inputs
     def_names = defs.keys()
     results = {}
@@ -1491,158 +1636,6 @@ def allocate_registers_gc(inputs: Tuple[Dict[str, x86.Program],
         results[name] = allocate_registers_help(helper_inputs)
 
     return results
-
-def allocate_registers_help(inputs: Tuple[x86.Program, InterferenceGraph]) -> \
-        Tuple[x86.Program, int, int]:
-
-    # Functions for listing the variables in the program
-    def vars_arg(a: x86.Arg) -> Set[x86.Var]:
-        if isinstance(a, (x86.Int, x86.Reg, x86.ByteReg, x86.GlobalVal, x86.Deref,
-                          x86.FunRef)):
-            return set()
-        elif isinstance(a, x86.Var):
-            return {a}
-        else:
-            raise Exception('vars_arg allocate_registers', a)
-
-    def vars_instr(e: x86.Instr) -> Set[x86.Var]:
-        if isinstance(e, (x86.Movq, x86.Addq, x86.Cmpq, x86.Movzbq, x86.Xorq, x86.Leaq)):
-            return vars_arg(e.e1).union(vars_arg(e.e2))
-        elif isinstance(e, (x86.Set, x86.Negq, x86.TailJmp, x86.IndirectCallq)):
-            return vars_arg(e.e1)
-        elif isinstance(e, (x86.Callq, x86.Retq, x86.Jmp, x86.JmpIf)):
-            return set()
-        else:
-            raise Exception('vars_instr allocate_registers', e)
-
-    # Defines the set of registers to use
-    register_locations = [x86.Reg(r) for r in
-                          constants.caller_saved_registers + constants.callee_saved_registers]
-
-    # Functions for graph coloring
-    def color_graph(local_vars: Set[x86.Var], interference_graph: InterferenceGraph) -> Coloring:
-        coloring = {}
-
-        to_color = local_vars.copy()
-        saturation_sets = {x: set() for x in local_vars}
-
-        # init the saturation sets
-        for color, register in enumerate(register_locations):
-            for neighbor in interference_graph.neighbors(register):
-                if isinstance(neighbor, x86.Var):
-                    saturation_sets[neighbor].add(color)
-
-        while to_color:
-            x = max(to_color, key=lambda x: len(saturation_sets[x]))
-            to_color.remove(x)
-
-            x_color = next(i for i in itertools.count() if i not in saturation_sets[x])
-            coloring[x] = x_color
-
-            for y in interference_graph.neighbors(x):
-                if isinstance(y, x86.Var):
-                    saturation_sets[y].add(x_color)
-
-        return coloring
-
-    # Functions for allocating registers
-    def make_stack_loc(offset):
-        return x86.Deref(-(offset * 8), 'rbp')
-
-
-    # Functions for replacing variables with their homes
-    homes: Dict[x86.Var, x86.Arg] = {}
-
-    def ah_arg(a: x86.Arg) -> x86.Arg:
-        if isinstance(a, (x86.Int, x86.Reg, x86.ByteReg, x86.Deref,
-                          x86.GlobalVal, x86.FunRef)):
-            return a
-        elif isinstance(a, x86.Var):
-            return homes[a]
-        else:
-            raise Exception('ah_arg', a)
-
-    def ah_instr(e: x86.Instr) -> x86.Instr:
-        if isinstance(e, x86.Movq):
-            return x86.Movq(ah_arg(e.e1), ah_arg(e.e2))
-        elif isinstance(e, x86.Addq):
-            return x86.Addq(ah_arg(e.e1), ah_arg(e.e2))
-        elif isinstance(e, x86.Cmpq):
-            return x86.Cmpq(ah_arg(e.e1), ah_arg(e.e2))
-        elif isinstance(e, x86.Movzbq):
-            return x86.Movzbq(ah_arg(e.e1), ah_arg(e.e2))
-        elif isinstance(e, x86.Xorq):
-            return x86.Xorq(ah_arg(e.e1), ah_arg(e.e2))
-        elif isinstance(e, x86.Negq):
-            return x86.Negq(ah_arg(e.e1))
-        elif isinstance(e, x86.Leaq):
-            return x86.Leaq(ah_arg(e.e1), ah_arg(e.e2))
-        elif isinstance(e, x86.Set):
-            return x86.Set(e.cc, ah_arg(e.e1))
-        elif isinstance(e, x86.TailJmp):
-            return x86.TailJmp(ah_arg(e.e1), e.num_args)
-        elif isinstance(e, x86.IndirectCallq):
-            return x86.IndirectCallq(ah_arg(e.e1), e.num_args)
-        elif isinstance(e, (x86.Callq, x86.Retq, x86.Jmp, x86.JmpIf)):
-            return e
-        else:
-            raise Exception('ah_instr', e)
-
-    def ah_block(instrs: List[x86.Instr]) -> List[x86.Instr]:
-        return [ah_instr(i) for i in instrs]
-
-    def align(num_bytes: int) -> int:
-        if num_bytes % 16 == 0:
-            return num_bytes
-        else:
-            return num_bytes + (16 - (num_bytes % 16))
-
-    # Main body of the pass
-    program, interference_graph = inputs
-    blocks = program.blocks
-
-    local_vars = set()
-    for block in blocks.values():
-        for instr in block:
-            local_vars = local_vars.union(vars_instr(instr))
-
-    coloring = color_graph(local_vars, interference_graph)
-    color_map = dict(enumerate(register_locations))
-    vec_color_map = dict(enumerate(register_locations))
-
-    stack_spills = 0
-    root_stack_spills = 0
-
-    # fill in locations in the color map
-    for v in local_vars:
-        if isinstance(v, x86.VecVar):
-            color = coloring[v]
-            if color in vec_color_map:
-                pass
-            else:
-                root_stack_spills = root_stack_spills + 1
-                offset = root_stack_spills
-                vec_color_map[color] = x86.Deref(-(offset * 8), 'r15')
-        elif isinstance(v, x86.Var):
-            color = coloring[v]
-            if color in color_map:
-                pass
-            else:
-                stack_spills = stack_spills + 1
-                offset = stack_spills + 1
-                color_map[color] = x86.Deref(-(offset * 8), 'rbp')
-
-    # build "homes"
-    for v in local_vars:
-        color = coloring[v]
-        if isinstance(v, x86.VecVar):
-            homes[v] = vec_color_map[color]
-        elif isinstance(v, x86.Var):
-            homes[v] = color_map[color]
-
-    blocks = program.blocks
-    new_blocks = {label: ah_block(block) for label, block in blocks.items()}
-    return x86.Program(new_blocks), align(8 * stack_spills), root_stack_spills
 
 
 ##################################################
