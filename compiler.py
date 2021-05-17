@@ -1111,7 +1111,7 @@ def allocate_registers(inputs: Tuple[Dict[str, x86.Program], Dict[str, List[Set[
     element is the number of variables spilled to the root (shadow) stack.
     """
     if inputs[2] == 'graph_color':
-        return allocate_registers_gc(build_interference((inputs[0], inputs[2])))
+        return allocate_registers_gc(build_interference((inputs[0], inputs[1])))
     elif inputs[2] == 'linear_scan':
         return linear_scan(inputs[0])
     else:
@@ -1219,8 +1219,8 @@ def build_interference(inputs: Tuple[Dict[str, x86.Program],
 
         interference_graph = InterferenceGraph()
 
-        for label in blocks.keys():
-            bi_block(blocks[label], live_after_sets[label], interference_graph)
+        for label, instrs in blocks.items():
+            bi_block(instrs, live_after_sets[label], interference_graph)
 
         return interference_graph
 
