@@ -1095,27 +1095,28 @@ def select_allocation(inputs: Tuple[Dict[str, x86.Program], Dict[str, List[Set[x
 ##################################################
 # allocate-registers
 ##################################################
-def allocate_registers(inputs: Tuple[Dict[str, x86.Program], str, Dict[str, List[Set[x86.Var]]]]) -> \
+def allocate_registers(inputs: Tuple[Dict[str, x86.Program], Dict[str, List[Set[x86.Var]]], str]) -> \
     Tuple[Dict[str, x86.Program],
           Dict[str, Tuple[x86.Program, int, int]]]:
     """
     Assigns homes to variables in the input program. Allocates registers and
     stack locations as needed, uses one of the possible allocation methods as given
-    by the second argument in the input
-    :param inputs: A Tuple. The first element is the pseudo-x86 program. The
-    second element is the allocation type for the program
+    by the third argument in the input.
+    :param inputs: A Tuple. The first element is the pseudo-x86 program. The second
+        element is ?. The third element is the allocation type for the program.
 
     :return: A dict mapping each function name to a Tuple. The first element
     of each tuple is an x86 program (with no variable references). The second
     element is the number of bytes needed in regular stack locations. The third
     element is the number of variables spilled to the root (shadow) stack.
     """
-    if inputs[1] == 'graph_color':
+    if inputs[2] == 'graph_color':
         return allocate_registers_gc(build_interference((inputs[0], inputs[2])))
-    elif inputs[1] == 'linear_scan':
+    elif inputs[2] == 'linear_scan':
         return linear_scan(inputs[0])
     else:
-        raise Exception('allocate_registers', e)
+        ic(inputs[2])
+        raise Exception('allocate_registers')
 
 ##################################################
 # build-interference
@@ -1324,7 +1325,7 @@ def linear_scan(inputs: Tuple[Dict[str, x86.Program],
         # of live intervals overlapping the current point and placed in registers
         live_interval: List[LiveInterval] = []  # live intervals
 
-        def expire_old_intervals(i : LiveInterval):
+        def expire_old_intervals(i: LiveInterval) -> None:
             active.sort(key=lambda x: x.endpoint)
             for j in active:  # sort active by increasing end point
                 if j.endpoint >= i.endpoint:
@@ -1332,27 +1333,27 @@ def linear_scan(inputs: Tuple[Dict[str, x86.Program],
                 active.remove(j)
                 available.append(j.register)
 
-        def spill_at_interval(i: LiveInterval):
-            active.sort(key=lambda x: x.endpoint)
+        def spill_at_interval(i: LiveInterval) -> None:
+            active.sort(key=lambda interval: interval.endpoint)
             spill = active[-1]
             if spill.endpoint > i.endpoint:
                 i.register = spill.register
                 spill.location = make_stack_loc(0)
                 active.remove(spill)
-                active += [i]
+                active.append(i)
             else:
                 i.location = make_stack_loc(0)
 
-    def make_stack_loc(offset):
+    def make_stack_loc(offset: int) -> x86.Deref:
         return x86.Deref(-(offset * 8), 'rbp')
 
     defs, interference_graphs = inputs
-    def_names = defs.keys()
     results = {}
 
-    for name in def_names:
-        helper_inputs = (defs[name], interference_graphs[name])
+    for name, program in defs.items():
+        helper_inputs = (program, interference_graphs[name])
         results[name] = allocate_registers_help(helper_inputs)
+    ic(results)
 
     return results
 
