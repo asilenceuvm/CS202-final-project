@@ -1096,20 +1096,24 @@ def select_allocation(inputs: Tuple[Dict[str, x86.Program], Dict[str, List[Set[x
 # allocate-registers
 ##################################################
 def allocate_registers(inputs: Tuple[Dict[str, x86.Program], Dict[str, List[Set[x86.Var]]], str]) -> \
-    Tuple[Dict[str, x86.Program],
-          Dict[str, Tuple[x86.Program, int, int]]]:
+        Dict[str, Tuple[x86.Program, int, int]]:
     """
     Assigns homes to variables in the input program. Allocates registers and
     stack locations as needed, uses one of the possible allocation methods as given
     by the third argument in the input.
     :param inputs: A Tuple. The first element is the pseudo-x86 program. The second
-        element is ?. The third element is the allocation type for the program.
+        element is a list of live-after sets. The third element is the allocation
+        type for the program.
 
     :return: A dict mapping each function name to a Tuple. The first element
     of each tuple is an x86 program (with no variable references). The second
     element is the number of bytes needed in regular stack locations. The third
     element is the number of variables spilled to the root (shadow) stack.
     """
+
+    ic('allocate_regs')
+    ic(inputs)
+
     if inputs[2] == 'graph_color':
         return allocate_registers_gc(build_interference((inputs[0], inputs[1])))
     elif inputs[2] == 'linear_scan':
@@ -1153,7 +1157,6 @@ class InterferenceGraph:
                 strings.append(f'{print_ast(k)}: {tt}')
         lines = '\n  '.join(strings)
         return f'InterferenceGraph (\n  {lines}\n )\n'
-
 
 
 def build_interference(inputs: Tuple[Dict[str, x86.Program],
@@ -1253,12 +1256,11 @@ class LiveInterval:
         return f'"{self.name}": {self.startpoint}-{self.endpoint} (location={self.location})'
 
 
-def linear_scan(inputs: Tuple[Dict[str, x86.Program],
-                              Dict[str, InterferenceGraph]]) -> \
+def linear_scan(defs: Dict[str, x86.Program]) -> \
         Dict[str, Tuple[x86.Program, int, int]]:
     """
-    Performs a linear scan register allocation algorithm
-    :param: inputs: pseudo-x86 assembly program definitions
+    Performs a linear scan register allocation algorithm for each named definition.
+    :param defs: A dict mapping function names to pseudo-x86 assembly program definitions.
 
     :return: A dict mapping each function name to a Tuple. The first element
     of each tuple is an x86 program (with no variable references). The second
@@ -1309,8 +1311,16 @@ def linear_scan(inputs: Tuple[Dict[str, x86.Program],
     '''
 
     # avail == caller_saved_registers
-    def linear_scan_help(inputs: Tuple[x86.Program, InterferenceGraph]) -> \
+    def linear_scan_help(p: x86.Program) -> \
             Tuple[x86.Program, int, int]:
+        """
+        Perform a linear scan register allocation alg.
+        :param p:
+        :return: A Tuple. The first element is an x86 program (with no variable
+            references). The second element is the number of bytes needed in regular
+            stack locations. The third element is the number of variables spilled to
+            the root (shadow) stack.
+        """
 
         # Active is the list, sorted in order of increasing end point, of live intervals
         # overlapping the current point and placed in registers
@@ -1344,17 +1354,18 @@ def linear_scan(inputs: Tuple[Dict[str, x86.Program],
             else:
                 i.location = make_stack_loc(0)
 
+        # TODO Return a Tuple[x86.Program, int, int]
+        return None
+
     def make_stack_loc(offset: int) -> x86.Deref:
         return x86.Deref(-(offset * 8), 'rbp')
 
-    defs, interference_graphs = inputs
-    results = {}
+    results: Dict[str, Tuple[x86.Program, int, int]] = {}
 
     for name, program in defs.items():
-        helper_inputs = (program, interference_graphs[name])
-        results[name] = allocate_registers_help(helper_inputs)
-    ic(results)
+        results[name] = linear_scan_help(program)
 
+    ic(results)
     return results
 
 
