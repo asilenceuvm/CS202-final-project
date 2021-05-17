@@ -1120,114 +1120,6 @@ def allocate_registers(inputs: Tuple[Dict[str, x86.Program], Dict[str, List[Set[
         ic(allocation_type)
         raise Exception('allocate_registers')
 
-##################################################
-# build-interference
-##################################################
-
-class InterferenceGraph:
-    """
-    A class to represent an interference graph: an undirected graph where nodes
-    are x86.Arg objects and an edge between two nodes indicates that the two
-    nodes cannot share the same locations.
-    """
-    graph: DefaultDict[x86.Arg, Set[x86.Arg]]
-
-    def __init__(self):
-        self.graph = defaultdict(lambda: set())
-
-    def add_edge(self, a: x86.Arg, b: x86.Arg):
-        if a != b:
-            self.graph[a].add(b)
-            self.graph[b].add(a)
-
-    def neighbors(self, a: x86.Arg) -> Set[x86.Arg]:
-        if a in self.graph:
-            return self.graph[a]
-        else:
-            return set()
-
-    def __str__(self):
-        strings = []
-        for k, v in dict(self.graph).items():
-            if isinstance(k, (x86.Var, x86.VecVar)):
-                t = ', '.join([print_ast(i) for i in v])
-                tt = '\n      '.join(textwrap.wrap(t))
-                strings.append(f'{print_ast(k)}: {tt}')
-        lines = '\n  '.join(strings)
-        return f'InterferenceGraph (\n  {lines}\n )\n'
-
-
-def build_interference(inputs: Tuple[Dict[str, x86.Program],
-                                     Dict[str, List[Set[x86.Var]]]]) -> \
-        Tuple[Dict[str, x86.Program],
-              Dict[str, InterferenceGraph]]:
-    """
-    Build the interference graph.
-    :param inputs: A Tuple. The first element is a pseudo-x86 program. The
-    second element is the dict of live-after sets produced by the uncover-live
-    pass.
-    :return: A Tuple. The first element is the same as the input program.
-    The second is a dict mapping each function name to its completed
-    interference graph.
-    """
-    defs, live_after_sets = inputs
-
-    caller_saved_registers = [x86.Reg(r) for r in constants.caller_saved_registers]
-    callee_saved_registers = [x86.Reg(r) for r in constants.callee_saved_registers]
-
-    def vars_arg(a: x86.Arg) -> Set[x86.Var]:
-        if isinstance(a, (x86.Int, x86.Deref, x86.GlobalVal)):
-            return set()
-        elif isinstance(a, (x86.Var, x86.VecVar, x86.Reg)):
-            return {a}
-        else:
-            raise Exception('bi_arg', a)
-
-    def writes_of(e: x86.Instr) -> Set[x86.Var]:
-        if isinstance(e, (x86.Movq, x86.Addq, x86.Movzbq, x86.Xorq, x86.Leaq)):
-            return vars_arg(e.e2)
-        elif isinstance(e, x86.Negq):
-            return vars_arg(e.e1)
-        elif isinstance(e, (x86.Callq, x86.Retq, x86.Jmp)):
-            return set()
-        else:
-            raise Exception('writes_of', e)
-
-    def bi_instr(e: x86.Instr, live_after: Set[x86.Var], graph: InterferenceGraph):
-        if isinstance(e, (x86.Movq, x86.Addq, x86.Movzbq, x86.Xorq, x86.Negq, x86.Leaq)):
-            for v1 in writes_of(e):
-                for v2 in live_after:
-                    graph.add_edge(v1, v2)
-        elif isinstance(e, (x86.Callq, x86.TailJmp, x86.IndirectCallq)):
-            for v in live_after:
-                for r in caller_saved_registers:
-                    graph.add_edge(v, r)
-                if isinstance(v, x86.VecVar):
-                    for r in callee_saved_registers:
-                        graph.add_edge(v, r)
-        elif isinstance(e, (x86.Retq, x86.Jmp, x86.Cmpq, x86.Jmp, x86.JmpIf, x86.Set)):
-            pass
-        else:
-            raise Exception('bi_instr', e)
-
-    def bi_block(instrs: List[x86.Instr], live_afters: List[Set[x86.Var]], graph: InterferenceGraph):
-        for instr, live_after in zip(instrs, live_afters):
-            bi_instr(instr, live_after, graph)
-
-    def bi_def(p: x86.Program) -> InterferenceGraph:
-        blocks = p.blocks
-
-        interference_graph = InterferenceGraph()
-
-        for label, instrs in blocks.items():
-            bi_block(instrs, live_after_sets[label], interference_graph)
-
-        return interference_graph
-
-    interference_graphs = {name: bi_def(p) for name, p in defs.items()}
-
-    return defs, interference_graphs
-
 
 ##################################################
 # allocate-registers
@@ -1454,11 +1346,113 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
     ic(results)
     return results
 
+
 ''' =============== allocate-registers: Graph Coloring =============== '''
 
 Color = int
 Coloring = Dict[x86.Var, Color]
 Saturation = Set[Color]
+
+class InterferenceGraph:
+    """
+    A class to represent an interference graph: an undirected graph where nodes
+    are x86.Arg objects and an edge between two nodes indicates that the two
+    nodes cannot share the same locations.
+    """
+    graph: DefaultDict[x86.Arg, Set[x86.Arg]]
+
+    def __init__(self):
+        self.graph = defaultdict(lambda: set())
+
+    def add_edge(self, a: x86.Arg, b: x86.Arg):
+        if a != b:
+            self.graph[a].add(b)
+            self.graph[b].add(a)
+
+    def neighbors(self, a: x86.Arg) -> Set[x86.Arg]:
+        if a in self.graph:
+            return self.graph[a]
+        else:
+            return set()
+
+    def __str__(self):
+        strings = []
+        for k, v in dict(self.graph).items():
+            if isinstance(k, (x86.Var, x86.VecVar)):
+                t = ', '.join([print_ast(i) for i in v])
+                tt = '\n      '.join(textwrap.wrap(t))
+                strings.append(f'{print_ast(k)}: {tt}')
+        lines = '\n  '.join(strings)
+        return f'InterferenceGraph (\n  {lines}\n )\n'
+
+def build_interference(inputs: Tuple[Dict[str, x86.Program], Dict[str, List[Set[x86.Var]]]]) -> \
+        Tuple[Dict[str, x86.Program], Dict[str, InterferenceGraph]]:
+    """
+    Build the interference graph.
+    :param inputs: A Tuple. The first element is a pseudo-x86 program. The
+    second element is the dict of live-after sets produced by the uncover-live
+    pass.
+    :return: A Tuple. The first element is the same as the input program.
+    The second is a dict mapping each function name to its completed
+    interference graph.
+    """
+    defs, live_after_sets = inputs
+
+    caller_saved_registers = [x86.Reg(r) for r in constants.caller_saved_registers]
+    callee_saved_registers = [x86.Reg(r) for r in constants.callee_saved_registers]
+
+    def vars_arg(a: x86.Arg) -> Set[x86.Var]:
+        if isinstance(a, (x86.Int, x86.Deref, x86.GlobalVal)):
+            return set()
+        elif isinstance(a, (x86.Var, x86.VecVar, x86.Reg)):
+            return {a}
+        else:
+            raise Exception('bi_arg', a)
+
+    def writes_of(e: x86.Instr) -> Set[x86.Var]:
+        if isinstance(e, (x86.Movq, x86.Addq, x86.Movzbq, x86.Xorq, x86.Leaq)):
+            return vars_arg(e.e2)
+        elif isinstance(e, x86.Negq):
+            return vars_arg(e.e1)
+        elif isinstance(e, (x86.Callq, x86.Retq, x86.Jmp)):
+            return set()
+        else:
+            raise Exception('writes_of', e)
+
+    def bi_instr(e: x86.Instr, live_after: Set[x86.Var], graph: InterferenceGraph):
+        if isinstance(e, (x86.Movq, x86.Addq, x86.Movzbq, x86.Xorq, x86.Negq, x86.Leaq)):
+            for v1 in writes_of(e):
+                for v2 in live_after:
+                    graph.add_edge(v1, v2)
+        elif isinstance(e, (x86.Callq, x86.TailJmp, x86.IndirectCallq)):
+            for v in live_after:
+                for r in caller_saved_registers:
+                    graph.add_edge(v, r)
+                if isinstance(v, x86.VecVar):
+                    for r in callee_saved_registers:
+                        graph.add_edge(v, r)
+        elif isinstance(e, (x86.Retq, x86.Jmp, x86.Cmpq, x86.Jmp, x86.JmpIf, x86.Set)):
+            pass
+        else:
+            raise Exception('bi_instr', e)
+
+    def bi_block(instrs: List[x86.Instr], live_afters: List[Set[x86.Var]], graph: InterferenceGraph):
+        for instr, live_after in zip(instrs, live_afters):
+            bi_instr(instr, live_after, graph)
+
+    def bi_def(p: x86.Program) -> InterferenceGraph:
+        blocks = p.blocks
+
+        interference_graph = InterferenceGraph()
+
+        for label, instrs in blocks.items():
+            bi_block(instrs, live_after_sets[label], interference_graph)
+
+        return interference_graph
+
+    interference_graphs = {name: bi_def(p) for name, p in defs.items()}
+
+    return defs, interference_graphs
 
 def allocate_registers_graph_coloring(inputs: Tuple[Dict[str, x86.Program],
                                                     Dict[str, InterferenceGraph]]) -> \
