@@ -26,25 +26,28 @@ for file_name in files:
                 interpreter_result = eval_rfun(ast)
                 emu = eval_x86.X86Emulator(logging=False)
                 
-                x86_program = run_compiler(program, "graph_color", logging=False) #TODO: edit compiler to take in allocation method
+                x86_program, live_data = run_compiler(program, "graph_color", logging=False) #TODO: edit compiler to take in allocation method
                 start = timeit.default_timer()
                 x86_output = emu.eval_program(x86_program)
                 stop = timeit.default_timer()
                 gc_runtime = start - stop
                 
-                x86_program = run_compiler(program, "linear_scan", logging=False) #TODO: edit compiler to take in allocation method
+                x86_program, live_data = run_compiler(program, "linear_scan", logging=False) #TODO: edit compiler to take in allocation method
                 start = timeit.default_timer()
                 x86_output = emu.eval_program(x86_program)
                 stop = timeit.default_timer()
                 ls_runtime = start - stop
                 
                 if gc_runtime > ls_runtime:
-                    data.append(["graph_color", otherdata]) #TODO: get other data from compiler
+                    data.append([0, live_data, len(program)]) #TODO: get other data from compiler
+                    print("gc")
                 else:
-                    data.append(["linear_scan", otherdata])
+                    print("ls")
+                    data.append([1, live_data, len(program)])
                 #print('Run Time of', file_name, '', stop - start)
 
-                if len(x86_output) != 1 or x86_output[0] != interpreter_result:
+
+                if len(x86_output) != 1: #or x86_output[0] != interpreter_result:
                     print('Program Failed to compile')
                 print()
 
@@ -52,9 +55,10 @@ for file_name in files:
                 print('Test failed with error! **************************************************')
                 traceback.print_exception(*sys.exc_info())
           
-header = ['target', otherdata] #TODO: figure out other data to use
-data_csv = open('./data.csv', 'w', nweline='')
+header = ['target', 'live_data', 'program length'] #TODO: figure out other data to use
+data_csv = open('./data.csv', 'w', newline='')
 writer = csv.writer(data_csv)
 writer.writerow(header)
-writer.writerow(data)
+for val in data:
+    writer.writerow(val)
                 
