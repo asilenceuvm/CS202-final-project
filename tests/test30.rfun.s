@@ -12,10 +12,10 @@ add1:
 
   jmp add1_start
 add1_start:
-  movq %rdi, %r14
-  movq %r14, %r14
-  addq $1, %r14
-  movq %r14, %rax
+  movq %rdi, %rdx
+  movq %rdx, %rdx
+  addq $1, %rdx
+  movq %rdx, %rax
   jmp add1_conclusion
 add1_conclusion:
 
@@ -45,9 +45,9 @@ main:
 
   jmp main_start
 main_start:
-  leaq add1(%rip), %r14
+  leaq add1(%rip), %rdx
   movq $41, %rdi
-  movq %r14, %rax
+  movq %rdx, %rax
   callq *%rax
   jmp main_conclusion
 main_conclusion:
