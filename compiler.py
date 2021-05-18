@@ -1173,7 +1173,7 @@ def build_live_intervals(p: Dict[str, x86.Program]) -> Tuple[Dict[str, x86.Progr
             # If they are not yet in live_intervals, add a new LiveIntervals for that var
             for var in live_set:
                 for live_interval in live_intervals:
-                    if live_interval.var.var == var.var:
+                    if live_interval.var == var:
                         live_interval.endpoint = line_num
                         break  # If this break is not reached, else \/ will execute
                 else:
@@ -1263,7 +1263,7 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
         # of live intervals overlapping the current point and placed in registers
         active: List[LiveInterval] = []
         def linear_scan_color_regs(live_intervals: List[LiveInterval]) \
-                -> Dict[x86.Var, x86.Arg]:
+                -> Dict[str, x86.Arg]:
             # Init the live intervals
             # Loop through intervals by increasing startpoint
             live_intervals.sort(key=lambda int_: int_.startpoint)
@@ -1281,7 +1281,8 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
 
             ic(live_intervals)
 
-            homes = {name: loc for name, loc in ((i.var, i.location) for i in live_intervals)}
+            homes: Dict[str, x86.Arg] = {i.var.var: i.location for i in live_intervals}
+
             return homes
 
         def expire_old_intervals(i: LiveInterval) -> None:
@@ -1305,20 +1306,18 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
             spill = active[-1]
 
             if spill.endpoint > i.endpoint:
+                i.location = spill.location
                 if isinstance(i.var, x86.VecVar):
-                    i.var = spill.var
-                    if i.location not in available_register_locations:
-                        root_stack_spills += 1
-                        offset = root_stack_spills
-                        spill.location = x86.Deref(- (offset * 8), 'r15')
+                    root_stack_spills += 1
+                    offset = root_stack_spills
+                    spill.location = x86.Deref(-(offset * 8), 'r15')
 
                 elif isinstance(i.var, x86.Var):
-                    i.var = spill.location
-                    if i.location not in available_register_locations:
-                        stack_spills += 1
-                        offset = stack_spills + 1
-                        spill.location = x86.Deref(-(offset * 8), 'rbp')
-
+                    stack_spills += 1
+                    offset = stack_spills + 1
+                    spill.location = x86.Deref(-(offset * 8), 'rbp')
+                active.remove(spill)
+                active.append(i)
             else:
                 if isinstance(i.location, x86.VecVar):
                     offset = root_stack_spills
@@ -1335,19 +1334,20 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
             return x86.Deref(-(offset * 8), 'rbp')
 
         ''' ============== Functions for replacing variables with their homes ============== '''
-        homes: Dict[x86.Var, x86.Arg] = {}
+        homes: Dict[str, x86.Arg] = {}
 
         def ah_arg(a: x86.Arg) -> x86.Arg:
+            # ic(a)
             if isinstance(a, (x86.Int, x86.Reg, x86.ByteReg, x86.Deref,
                               x86.GlobalVal, x86.FunRef)):
                 return a
             elif isinstance(a, x86.Var):
-                return homes[a]
+                # ic(homes)
+                return homes[a.var]
             else:
                 raise Exception('ah_arg', a)
 
         def ah_instr(e: x86.Instr) -> x86.Instr:
-            ic(e)
             if isinstance(e, x86.Movq):
                 return x86.Movq(ah_arg(e.e1), ah_arg(e.e2))
             elif isinstance(e, x86.Addq):
@@ -1387,7 +1387,7 @@ def allocate_registers_linear_scan(defs: Dict[str, x86.Program], defs_live_inter
         blocks = p.blocks
 
         # Build "homes"
-        homes: Dict[x86.Var, x86.Arg] = linear_scan_color_regs(live_intervals)
+        homes: Dict[str, x86.Arg] = linear_scan_color_regs(live_intervals)
         ic(homes)
         vec_color_map = dict(enumerate(available_register_locations))
 
@@ -1584,8 +1584,7 @@ def allocate_registers_graph_coloring(inputs: Tuple[Dict[str, x86.Program],
             # temp_lst.sort(key=lambda i: i[0].var)
             # temp = {var.var: color for var, color in temp_lst}
             # ic(temp)
-            ic(saturation_sets)
-
+            # ic(saturation_sets)
 
             return coloring
 
